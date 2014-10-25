@@ -10,11 +10,17 @@ class Host:
         self.name = name
         # host address
         self.addr = addr
+        # Queue to hold packets to transmit
+        self.packets = Queue()
 
     def transmit(self, env):
         """Transmit packets to their destination."""
         pass
 
     def receive(self, env):
-        """Receive an inbound (acknowledgement) packet."""
+        """Receive & forwards an inbound (acknowledgement) packet."""
+        pass
+
+    def acknowledge(self, env):
+        """Transmit acknowledgement packet of size 64 bytes"""
         pass

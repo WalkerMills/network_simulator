@@ -16,6 +16,9 @@ class Flow:
         # Flow start time
         self.start = time.perf_counter()
 
+        # Queue to hold packets to transmit to use for flow control
+        self.packets = Queue()
+
         # TODO: check data for a valid value
 
         # Flag to determine finite data output; None specifies infinite
@@ -30,6 +33,3 @@ class Flow:
         """The simplest form of flow control of stop and wait"""
         pass
 
-    def acknowledge(self, env):
-        """Transmit acknowledgement packet of size 64 bytes"""
-        pass
