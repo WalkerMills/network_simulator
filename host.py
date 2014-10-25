@@ -11,8 +11,10 @@ class Host:
         # host address
         self.addr = addr
 
-    def acknowledge(self, env):
-        """Transmit acknowledgement packet of size 64 bytes"""
+    def transmit(self, env):
+        """Transmit packets to their destination."""
         pass
 
-    
+    def receive(self, env):
+        """Receive an inbound (acknowledgement) packet."""
+        pass

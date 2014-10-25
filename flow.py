@@ -26,13 +26,10 @@ class Flow:
         """Generate packets of size 1024 bytes to send."""
         pass
 
-    def transmit(self, env):
-        """Transmit packets to their destination."""
-        pass
-
-    def receive(self, env):
-        """Receive an inbound (acknowledgement) packet."""
-        pass
-
     def stop_and_wait(self, env, timeout):
         """The simplest form of flow control of stop and wait"""
+        pass
+
+    def acknowledge(self, env):
+        """Transmit acknowledgement packet of size 64 bytes"""
+        pass
