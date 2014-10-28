@@ -41,3 +41,13 @@ class Link:
     def send(self, event):
         """Send a packet through the link."""
         pass
+
+    def cost(self):
+        """Calculate the cost of this link.
+
+        Cost is proportional to link capacity & rate, and inversely
+        proportional to delay.
+
+        """
+
+        return self._capacity * self._rate / self._delay

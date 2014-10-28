@@ -57,4 +57,4 @@ class Router(object):
     def register_link(self, transport):
         """Register an outbound link (transport handler)."""
 
-        self.links.append(transport)
+        self.links.append((transport, transport.cost()))
