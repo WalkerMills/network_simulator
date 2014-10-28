@@ -5,8 +5,8 @@ class RouterPut(simpy.resources.base.Put):
     """Add a packet to the router queue"""
 
     def __init__(self, resource, packet):
-        super(RouterPut, self).__init__(resource)
         self.packet = packet
+        super(RouterPut, self).__init__(resource)
 
 
 class RouterGet(simpy.resources.base.Get):
@@ -18,9 +18,9 @@ class Router(simpy.resources.base.BaseResource):
     """Simulator object representing a router."""
 
     def __init__(self, env):
-        self.env = env
-        self.packets = list()
+        super(Router, self).__init__(env)
 
+        self.packets = list()
         # TODO: cache cost for each outbound link
         self.links = list()
 
@@ -34,7 +34,6 @@ class Router(simpy.resources.base.BaseResource):
         # Add the packet to the router's queue
         self.packets.append(event.packet)
         # Add a callback to send a packet
-        event.callbacks.append(self._do_get)
         event.succeed()
 
     def _do_get(self, event):

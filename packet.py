@@ -1,7 +1,7 @@
 class Packet(object):
     """This class represents a packet in our simulation."""
 
-     def __init__(self, src, dest):
+    def __init__(self, src, dest):
         self._src = src
         self._dest = dest
         self._size = 1024
