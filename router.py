@@ -1,47 +1,60 @@
 import simpy
 
 
-class RouterPut(simpy.resources.base.Put):
-    """Add a packet to the router queue"""
+class ReceivePacket(simpy.events.Event):
 
     def __init__(self, resource, packet):
+        # Initialize event
+        super(ReceivePacket, self).__init__(resource._env)
+        self.resource = resource
         self.packet = packet
-        super(RouterPut, self).__init__(resource)
+        self.proc = self.env.active_process
+
+        print('Got packet at time {}'.format(self.env.now))
+        # Add this event to the packet queue
+        resource.packets.append(self)
+        # Send a packet, since we have enqueued a new packet
+        self.resource._trigger_send()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exception, value, traceback):
+        # If the event was interrupted, dequeue it
+        if not self.triggered:
+            self.resource.packets.remove(self)
+
+    cancel = __exit__
 
 
-class RouterGet(simpy.resources.base.Get):
-    """Send a packet from the router queue"""
-    pass
+class Router(object):
 
-
-class Router(simpy.resources.base.BaseResource):
-    """Simulator object representing a router."""
+    PacketQueue = list
 
     def __init__(self, env):
-        super(Router, self).__init__(env)
-
-        self.packets = list()
-        # TODO: cache cost for each outbound link
+        self._env = env
+        self.packets = self.PacketQueue()
         self.links = list()
 
-    put = simpy.core.BoundClass(RouterPut)
+        # Bind event constructors as methods
+        simpy.core.BoundClass.bind_early(self)
 
-    get = simpy.core.BoundClass(RouterGet)
+    receive = simpy.core.BoundClass(ReceivePacket)
 
-    def _do_put(self, event):
-        """Put a packet into the router queue."""
+    def _send(self, packet):
+        """Send an outbound packet."""
 
-        # Add the packet to the router's queue
-        self.packets.append(event.packet)
-        # Add a callback to send a packet
+        # TODO: route packet, send it through a link
+        pass
+
+    def _trigger_send(self):
+        """Trigger outbound packet transmission."""
+
+        event = self.packets.pop(0)
+        self._send(event.packet)
         event.succeed()
 
-    def _do_get(self, event):
-        """Send a packet from the queue."""
-
-        # TODO: each packet needs to be routed down a link
-        event.succeed(self.packets.pop(0))
-
     def register_link(self, transport):
-        # Register an outbound link (transport handler)
+        """Register an outbound link (transport handler)."""
+
         self.links.append(transport)
