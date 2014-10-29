@@ -1,45 +1,59 @@
+import packet
 import simpy
 
-class Host(object):
-    """Simulator object representing a host
-    A host can only send 1 packet at a timeout
 
-    Flows have to request for the host. When they have access
-    to one, they can start the sending process and wait for it 
-    to finish and to receive the acknowledgement packet
+class Host(object):
+    """Simulator object representing a host.
+    
+    Hosts are implemented as a unidirectional resource.  It receives
+    packets, but does not accept packet transmission requests.  Every
+    packet arrival triggers a packet transmission, at which time the
+    next packet in the queue is popped.  Inbound data packets trigger
+    an automatic acknowledgement, and inbound ACK packets are sent to
+    the appropriate flow.  Outbound packets are transmitted via the
+    outbound link, if it exists.
+
     """
 
-    def __init__(self, env, addr, sendtime, receivetime):
-        self.env = env
-        # host name. DNS translates this into an IP address
-        self.name = name
+    def __init__(self, env, addr):
+        self._env = env
         # host address
-        self.addr = addr
+        self._addr = addr
         # Queue to hold packets to transmit
-        self.packets = Queue()
-        # Create a shared resource to limit flows' access
-        self.host = simpy.Resource(env, 1)
-        # This is the time it takes for the host to send a packet
-        self.sendtime = sendtime
-        # This is the time it takes for a host to receive a packet
-        self.receivetime = receivetime
+        self._packets = list()
+        # Outbound link
+        self._link = None
 
-    def transmit(self, packet):
-        """Transmit packets to their destination."""
-        yield self.env.timeout(self.sendtime)
+        simpy.core.BoundClass.bind_early(self)
 
-    def transmitack(self, env, packet, senderaddr):
-        """Transmit acknowledgement packet of size 64 bytes"""
-        yield self.env.timeout(self.sendtime)
+    @property
+    def addr(self):
+        return self._addr
 
-    def receive(self, env, packet, senderaddr):
-        """Receive inbound packet."""
-        ack = Packet()
-        yield self.env.timeout(self.receivetime)
-        transmitack(self, env, ack, senderaddr)
+    receive = simpy.core.BoundClass(packet.ReceivePacket)
 
-    def receiveack(self, env):
-        """ Receive an inbound acknowledgement packet"""
-        while True:
-            if (ack is received):
-                break
+    def _transmit(self, packet):
+        """transmit an outbound packet."""
+        if packet.dest == self.addr:
+            # TODO: send ACK back to source flow
+            pass
+        else:
+            # TODO: send outbound packet through self.link
+            pass
+
+    def _trigger_transmit(self):
+        """Trigger outbound packet transmission."""
+        event = self._packets.pop(0)
+
+        # If a data packet has reached its destination, transmit an ACK
+        if event.packet.dest == self.addr && event.packet.size == 1024:
+            ack = packet.ACK(self.addr, event.packet.src)
+            self._transmit(ack)
+        # Otherwise, transmit the packet
+        else:
+            self._transmit(event.packet)
+        event.succeed()
+
+    def register_link(self, transport):
+        """Register outbound link (transport handler)."""
+        self._link = transport

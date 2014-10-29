@@ -42,6 +42,7 @@ class Link:
         """Send a packet through the link."""
         pass
 
+   # TODO: implement dynamic cost method, rename this one
     def cost(self):
         """Calculate the cost of this link.
 
@@ -49,5 +50,4 @@ class Link:
         proportional to delay.
 
         """
-
         return self._capacity * self._rate / self._delay

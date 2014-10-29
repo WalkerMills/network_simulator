@@ -1,72 +1,62 @@
+import packet
 import simpy
-
-
-class ReceivePacket(simpy.events.Event):
-    """Simulator event representing packet reception.
-
-    This event takes a router as a parameter, and represents the addition
-    of a packet to that router.  It also triggers a packet transmission
-    for each packet received.  This event may also be used as a context
-    manager.
-    """
-
-    def __init__(self, resource, packet):
-        # Initialize event
-        super(ReceivePacket, self).__init__(resource._env)
-        self.resource = resource
-        self.packet = packet
-        self.proc = self.env.active_process
-
-        print('Got packet at time {}'.format(self.env.now))
-        # Add this event to the packet queue
-        resource.packets.append(self)
-        # Send a packet, since we have enqueued a new packet
-        self.resource._trigger_send()
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exception, value, traceback):
-        # If the event was interrupted, dequeue it
-        if not self.triggered:
-            self.resource.packets.remove(self)
-
-    cancel = __exit__
 
 
 class Router(object):
     """Simulator object representing a router.
 
     Router is implemented as a unidirectional resource.  It receives
-    packets, but does not offer packet transmission requests.
+    packets, but does not accept packet transmission requests.  Every
+    packet arrival triggers a packet transmission, at which time the
+    next packet in the queue is popped, routed, and sent through the
+    appropriate link.
     """
-    # Queue of packet events to process
-    PacketQueue = list
 
-    def __init__(self, env):
+    def __init__(self, env, dynamic=False):
         self._env = env
-        self.packets = self.PacketQueue()
+        self._dynamic = dynamic
+        # Queue of packet events to process
+        self._packets = list()
         # List of outbound links of the form (link cost, link)
-        self.links = list()
+        self._links = list()
         # Dictionary mapping outbound links to destination ranges
-        self.table = dict()
+        self._table = dict()
 
         # Bind event constructors as methods
         simpy.core.BoundClass.bind_early(self)
 
-    receive = simpy.core.BoundClass(ReceivePacket)
+    receive = simpy.core.BoundClass(packet.ReceivePacket)
 
-    def _send(self, packet):
-        """Send an outbound packet."""
-        # TODO: route packet, send it through a link
+    @property
+    def dynamic(self):
+        return self._dynamic
+
+    @dynamic.setter
+    def dynamic(self, d):
+        if d not in [True, False]:
+            raise ValueError("Invalid dynamic flag value.")
+
+        self._dynamic = d
+
+    def route(self, dest, dynamic=False):
+        in_range = lambda l: dest in self._table[l[1]]
+        # TODO: dynamic routing updates link costs before choosing
+        out = min(filter(in_range, self._links))
+
+        return out
+
+    def _transmit(self, packet):
+        """Transmit an outbound packet."""
+        # TODO: route packet & transmit it through a link
         pass
 
-    def _trigger_send(self):
+    def _trigger_transmit(self):
         """Trigger outbound packet transmission."""
-        event = self.packets.pop(0)
-        self._send(event.packet)
+        event = self._packets.pop(0)
+        self._transmit(event.packet)
         event.succeed()
 
     def register_link(self, transport):
         """Register an outbound link (transport handler)."""
-        self.links.append((transport.cost(), transport))
+        self._links.append((transport.cost(), transport))
+        # TODO: add link endpoints to self._table
