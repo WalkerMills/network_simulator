@@ -1,5 +1,8 @@
 import simpy
-import time
+import queue
+
+# TODO: use processes to control interaction between network resources
+
 
 class Flow:
     """Simulator object representing a flow."""
@@ -17,7 +20,7 @@ class Flow:
         self.start = time.perf_counter()
 
         # Queue to hold packets to transmit to use for flow control
-        self.packets = Queue()
+        self.packets = queue.Queue()
 
         # TODO: check data for a valid value
 
