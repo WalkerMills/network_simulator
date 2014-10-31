@@ -15,8 +15,8 @@ class Packet(object):
         # Packet data
         self._data = payload
 
-        # Simulated packet size
-        self._size = 1024
+        # Simulated packet size (bits)
+        self._size = 8192
         # Packet ID
         self._id = pid
 
@@ -53,9 +53,18 @@ class Packet(object):
 class ACK(Packet):
     """This class represents an acknowedgement packet."""
 
-    def __init__(self, src, dest, flow, payload):
-        super(ACK, self).__init__(src, dest, flow, payload)
-        self._size = 64
+    def __init__(self, src, dest, fid, payload):
+        # Packet source address
+        self._src = src
+        # Packet destination address
+        self._dest = dest
+        # Flow ID on the source host
+        self._flow = fid
+        # Packet data
+        self._data = payload
+
+        # Simulated packet size (bits)
+        self._size = 512
 
 
 class ReceivePacket(simpy.events.Event):
@@ -75,8 +84,7 @@ class ReceivePacket(simpy.events.Event):
 
         # Add this event to the packet queue
         resource._packets.append(self)
-        # Send a packet, since we enqueued a new packet
-        self.resource._trigger_transmit()
+        resource._receive()
 
     def __enter__(self):
         return self
@@ -93,12 +101,11 @@ class HostResource(object):
     """Resource representing a host.
     
     This is a host implemented as a unidirectional resource.  It receives
-    packets, but does not accept packet transmission requests.  Every
-    packet arrival triggers a packet transmission, at which time the
-    next packet in the queue is popped.  Inbound data packets trigger
-    an automatic acknowledgement, and inbound ACK packets are sent to
-    the appropriate flow.  Outbound packets are transmitted via the
-    outbound link, if it exists.
+    packets, but does not accept packet transmission requests.  Whenever
+    a packet is received, this resource returns a packet to be sent.  If
+    an inbound data packet is received, an acknowedgement is generated
+    and sent, and the data packet itself is discarded (data packets don't
+    have a destination flow)
 
     """
 
@@ -106,64 +113,31 @@ class HostResource(object):
         self._env = env
         # host address
         self._addr = addr
-        # Queue to hold packets to transmit
+        # Queue to hold inbound packets to transmit
         self._packets = list()
-        # Outbound link
-        self._link = None
-        # Active flows
-        self._flows = list()
 
         simpy.core.BoundClass.bind_early(self)
 
-    receive = simpy.core.BoundClass(packet.ReceivePacket)
+    receive = simpy.core.BoundClass(ReceivePacket)
 
     @property
     def addr(self):
         """The address of this host."""
         return self._addr
 
-    @property
-    def link(self):
-        """The outbound link connected to this host."""
-        return self._link
-
-    @link.setter
-    def link(self, link):
-        self._link = link
-
-    @property
-    def flows(self):
-        """A list of flows active on this host."""
-        return self._flows
-
-    def register(self, flow):
-        """Register a new flow on this host, and return the flow ID."""
-        self._flows.append(flow)
-        return len(self._flows) - 1
-
-    def _transmit(self, packet):
-        """transmit an outbound packet."""
-        if packet.dest == self.addr:
-            # TODO: send ACK back to source flow
-            pass
-        else:
-            # TODO: send outbound packet through outbound link
-            pass
-
-    def _trigger_transmit(self):
-        """Trigger outbound packet transmission."""
+    def _receive(self):
+        """Receive a packet, and return a packet to be sent."""
         event = self._packets.pop(0)
 
         # If a data packet has reached its destination, transmit an ACK
         # back to the source flow
-        if event.packet.dest == self.addr && event.packet.size == 1024:
-            ack = ACK(self.addr, event.packet.src, event.packet.flow
-                      event.packet.id + 1)
-            self._transmit(ack)
+        if event.packet.dest == self.addr and event.packet.size == 1024:
+            ack = ACK(self.addr, event.packet.src, event.packet.flow,
+                      event.packet._id + 1)
+            event.succeed(ack)
         # Otherwise, transmit the packet
         else:
-            self._transmit(event.packet)
-        event.succeed()
+            event.succeed(event.packet)
 
 
 class RouterResource(object):
@@ -240,7 +214,7 @@ class RouterResource(object):
         event.succeed()
 
 
-class LinkTransmit(simpy.events.Event):
+class LinkTransport(simpy.events.Event):
     """Simulator event representing directional packet transmission.
 
     This event takes a resource as a parameter, and represents the
@@ -250,24 +224,21 @@ class LinkTransmit(simpy.events.Event):
 
     def __init__(self, link, direction, packet):
         # Initialize event
-        super(LinkTransmit, self).__init__(link._env)
+        super(LinkTransport, self).__init__(link._env)
         self._link = link
         self._direction = direction
         self._packet = packet
 
         # Enqueue the packet for transmission, if the buffer isn't full
-        if link.size - link._fill[direction] >= packet.size:
+        if link._fill[direction] + packet.size <= link.size:
             # Increment buffer fill
             link._fill[direction] += packet.size
             # Enqueue packet
             link._packet_queues[direction].put_nowait(self)
-            # Add a callback to update link rate on transmission completion
-            self.callbacks.append(link._trigger_finish)
-
+            # Transport a packet through the link
+            link._receive(direction)
 
     def __enter__(self):
-        # Transport a packet through the link
-        self._link._trigger_transmit(self._direction)
         return self
 
     def __exit__(self, exception, value, traceback):
@@ -295,103 +266,35 @@ class LinkResource(object):
     allowed directions (0 or 1)
     """
 
-    def __init__(self, env, capacity, delay, buf_size):
+    def __init__(self, env, buf_size):
         self._env = env
 
-        # Check capacity, delay, & rate for valid values
-        if any(map(lambda opt: opt < 0, (capacity, delay, buf_size))):
-            raise ValueError("capacity, delay, and buffer size must be >= 0")
+        # Check buffer size for valid value
+        if buf_size < 0:
+            raise ValueError("buffer size must be >= 0")
 
-        # Link rate (Bps)
-        self._capacity = capacity
-        # Link traffic (Bps)
-        self._traffic = [0, 0]
-        # Link delay (seconds)
-        self._delay = delay
-        # Buffer size (bytes)
+        # Buffer size (bits)
         self._size = buf_size
-        # Buffer fill (bytes)
+        # Buffer fill (bits)
         self._fill = [0, 0]
 
         # Buffers for each edge direction
-        self._packet_queues = (queue.Queue(self._capacity),
-                               queue.Queue(self._capacity))
-        # Endpoints for each direction
-        self._endpoints = [None, None]
+        self._packet_queues = (queue.Queue(), queue.Queue())
         # Bind any classes into methods now
         simpy.core.BoundClass.bind_early(self)
 
-    transport = simpy.core.BoundClass(LinkTransmit)
+    transport = simpy.core.BoundClass(LinkTransport)
     """Transport packets across the link in a given direction."""
 
     @property
-    def capacity(self):
-        """The maximum bitrate of the link in Bps."""
-        return self._capacity
-
-    @property
-    def delay(self):
-        """The link delay in seconds."""
-        return self._delay
-
-    @property
     def size(self):
-        """Maximum buffer capacity in bytes."""
+        """Maximum buffer capacity in bits."""
         return self._size
 
-    @property
-    def endpoints(self):
-        """A list of connected endpoints (=< 1 per direction)"""
-        return self._endpoints
-
-    @endpoints.setter
-    def endpoints(self, direction, endpoint):
-        self._endpoints[direction] = endpoint
-
-    def disconnect(self, direction):
-        """Disconnect a transmission endpoint."""
-        self._endpoints[direction] = None        
-
-    # TODO: implement dynamic cost method
-    def static_cost(self):
-        """Calculate the static cost of this link.
-
-        Cost is inversely proportional to link capacity & rate, and 
-        directly proportional to delay.
-
-        """
-        try:
-            return self._delay / (self._capacity * self._rate)
-        # If the link is down (0 capacity || 0 bps), return infinite cost
-        except ZeroDivisionError:
-            return float("inf")
-
-    def _transmit(self, direction, packet):
-        """Transmit a packet across the link in a given direction."""
-        # Update link traffic
-        self._traffic[direction] += packet.size
-        # If the link is disconnected or full, drop the packet
-        if self._endpoints[direction] == None or \
-            self._capacity < self._traffic[direction]:
-            return
-
-        # TODO: send the packet to the resource at the appropriate endpoint
-
-    def _trigger_transmit(self, direction):
-        """Trigger packet transmission."""
-        try:
-            # Dequeue a packet
-            event = self._packet_queues[direction].get_nowait()
-            # Update buffer fill
-            self._fill[direction] -= event.packet.size
-        except queue.Empty:
-            return
-
-        # Transmit packet
-        self._transmit(direction, event.packet)
-        # Trigger event callbacks
-        event.succeed()
-
-    def _trigger_finish(self, event):
-        """Update link rate after a packet is sent."""
-        self._traffic[event.direction] -= event.packet.size
+    def _receive(self, direction):
+        # Dequeue a packet
+        event = self._packet_queues[direction].get_nowait()
+        # Update buffer fill
+        self._fill[direction] -= event.packet.size
+        # Return dequeued packet
+        event.succeed(event.packet)
