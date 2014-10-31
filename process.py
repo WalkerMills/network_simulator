@@ -146,7 +146,6 @@ class Link:
             # Decrement directional traffic
             self._traffic[direction] -= packet.size
 
-    # TODO: implement dynamic cost method
     def static_cost(self):
         """Calculate the static cost of this link.
 
@@ -160,13 +159,20 @@ class Link:
         except ZeroDivisionError:
             return float("inf")
 
-    def cost(self, direction):
+    def dynamic_cost(self, direction):
         """Calculate the dynamic cost of a direction on this link.
 
-        Dynamic cost is directly proportional to link delay and
-        utilization.
+        Dynamic cost is directly proportional to link traffic and buffer
+        fill.
         """
-        return self._traffic[direction] * self.static_cost()
+        return self._traffic[direction] * self.res.fill(direction)
+
+    def cost(self, direction):
+        """Return the total cost of a direction on this link.
+
+        Total cost is simply calculated as static cost + dynamic cost
+        """
+        return self.static_cost() + self.dynamic_cost(direction)
 
 
 class Flow(object):

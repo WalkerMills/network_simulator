@@ -268,8 +268,8 @@ class LinkResource(object):
         self._env = env
 
         # Check buffer size for valid value
-        if buf_size < 0:
-            raise ValueError("buffer size must be >= 0")
+        if buf_size <= 0:
+            raise ValueError("buffer size must be > 0")
 
         # Buffer size (bits)
         self._size = buf_size
@@ -288,6 +288,9 @@ class LinkResource(object):
     def size(self):
         """Maximum buffer capacity in bits."""
         return self._size
+
+    def fill(self, direction):
+        return self._fill[direction] / self.buffer
 
     def _receive(self, direction):
         # Dequeue a packet
