@@ -15,11 +15,10 @@ class Packet(object):
         self._dest = dest
         # Flow ID on the source host
         self._flow = fid
-        # Packet data
-        self._data = payload
-
         # Packet ID
         self._id = pid
+        # Packet data
+        self._data = payload
 
     @property
     def src(self):
@@ -36,6 +35,7 @@ class Packet(object):
         """Return the ID of the sender (flow) on the source host."""
         return self._flow
 
+    @property
     def id(self):
         """Return the ID of this packet."""
         return self._id
@@ -49,7 +49,7 @@ class Packet(object):
 class ACK(Packet):
     """This class represents an acknowedgement packet."""
 
-    # Acknowledgement packet size (bits)
+    # Simulated acknowledgement packet size (bits)
     size = 512
 
     def __init__(self, src, dest, fid, payload):
@@ -59,6 +59,8 @@ class ACK(Packet):
         self._dest = dest
         # Flow ID on the source host
         self._flow = fid
+        # ACK's have no packet ID
+        self._id = None
         # Packet data
         self._data = payload
 
@@ -129,7 +131,7 @@ class HostResource(object):
         # back to the source flow
         if event.packet.dest == self.addr and event.packet.size == Packet.size:
             ack = ACK(self.addr, event.packet.src, event.packet.flow,
-                      event.packet._id + 1)
+                      event.packet.id + 1)
             event.succeed(ack)
         # Otherwise, transmit the packet
         else:
