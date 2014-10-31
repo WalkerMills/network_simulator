@@ -5,6 +5,9 @@ import simpy
 class Packet(object):
     """This class represents a packet in our simulation."""
 
+    # Simulated packet size (bits)
+    size = 8192
+
     def __init__(self, src, dest, fid, pid, payload):
         # Packet source address
         self._src = src
@@ -15,8 +18,6 @@ class Packet(object):
         # Packet data
         self._data = payload
 
-        # Simulated packet size (bits)
-        self._size = 8192
         # Packet ID
         self._id = pid
 
@@ -29,11 +30,6 @@ class Packet(object):
     def dest(self):
         """Return the packet's destination address."""
         return self._dest
-
-    @property
-    def size(self):
-        """Return the packet size in bytes."""
-        return self._size
 
     @property
     def flow(self):
@@ -53,6 +49,9 @@ class Packet(object):
 class ACK(Packet):
     """This class represents an acknowedgement packet."""
 
+    # Acknowledgement packet size (bits)
+    size = 512
+
     def __init__(self, src, dest, fid, payload):
         # Packet source address
         self._src = src
@@ -62,9 +61,6 @@ class ACK(Packet):
         self._flow = fid
         # Packet data
         self._data = payload
-
-        # Simulated packet size (bits)
-        self._size = 512
 
 
 class ReceivePacket(simpy.events.Event):
@@ -131,7 +127,7 @@ class HostResource(object):
 
         # If a data packet has reached its destination, transmit an ACK
         # back to the source flow
-        if event.packet.dest == self.addr and event.packet.size == 1024:
+        if event.packet.dest == self.addr and event.packet.size == Packet.size:
             ack = ACK(self.addr, event.packet.src, event.packet.flow,
                       event.packet._id + 1)
             event.succeed(ack)
