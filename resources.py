@@ -1,5 +1,6 @@
 import queue
 import simpy
+import simpy.util
 
 
 class Packet(object):
@@ -45,24 +46,27 @@ class Packet(object):
         """Return this packet's payload of data."""
         return self._data
 
+    def acknowledgement(self):
+        return ACK(self._dest, self._src, self._flow, self._id)
+
 
 class ACK(Packet):
-    """This class represents an acknowedgement packet."""
+    """This class represents an acknowledgement packet."""
 
     # Simulated acknowledgement packet size (bits)
     size = 512
 
-    def __init__(self, src, dest, fid, payload):
+    def __init__(self, src, dest, fid, pid):
         # Packet source address
         self._src = src
         # Packet destination address
         self._dest = dest
         # Flow ID on the source host
         self._flow = fid
-        # ACK's have no packet ID
-        self._id = None
-        # Packet data
-        self._data = payload
+        # ID of the packet which triggered this acknowledgement
+        self._id = pid
+        # Acknowledgement packets have no payload
+        self._data = None
 
 
 class ReceivePacket(simpy.events.Event):
@@ -101,7 +105,7 @@ class HostResource(object):
     This is a host implemented as a unidirectional resource.  It receives
     packets, but does not accept packet transmission requests.  Whenever
     a packet is received, this resource returns a packet to be sent.  If
-    an inbound data packet is received, an acknowedgement is generated
+    an inbound data packet is received, an acknowledgement is generated
     and sent, and the data packet itself is discarded (data packets don't
     have a destination flow)
 
@@ -127,14 +131,12 @@ class HostResource(object):
         """Receive a packet, and return a packet to be sent."""
         event = self._packets.pop(0)
 
-        # If a data packet has reached its destination, transmit an ACK
-        # back to the source flow
+        # If a data packet has reached its destination
         if event.packet.dest == self.addr and event.packet.size == Packet.size:
-            ack = ACK(self.addr, event.packet.src, event.packet.flow,
-                      event.packet.id + 1)
-            event.succeed(ack)
-        # Otherwise, transmit the packet
+            # Send back an ackonwledgement packet
+            event.succeed(event.packet.acknowledgement())
         else:
+            # Transmit the packet
             event.succeed(event.packet)
 
 

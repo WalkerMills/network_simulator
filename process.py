@@ -1,10 +1,13 @@
+import math
 import queue
-import resources
+import random
 import simpy
+
+import resources
 
 # TODO: use processes to control interaction between network resources
 
-class Host:
+class Host(object):
     """SimPy process representing a host.
 
     Each host process has an underlying HostResource which handles
@@ -71,10 +74,10 @@ class Host:
         else:
             # Send an inbound ACK to its destination flow
             yield self.res._env.process(
-                self._flows[packet.flow].receive(packet))
+                self._flows[packet.flow].acknowledge(packet))
 
 
-class Link:
+class Link(object):
     """SimPy process representing a link.
 
     Each link process has an underlying LinkResource which handles
@@ -138,11 +141,15 @@ class Link:
         if packet.size + self._traffic[direction] <= self._capacity:
             # Increment directional traffic
             self._traffic[direction] += packet.size
-            # Wait as if transmitting packet across a physical link
-            yield self.res._env.timeout(self._delay)
-            # Transmit the packet
-            yield self.res._env.process(
-                self._endpoints[direction].receive(packet))
+            # # Wait as if transmitting packet across a physical link
+            # yield self.res._env.timeout(self._delay)
+            # # Transmit the packet
+            # yield self.res._env.process(
+            #     self._endpoints[direction].receive(packet))
+            # Transmit packet after waiting, as if sending the packet
+            # across a physical link
+            yield simpy.util.start_delayed(self.res._env,
+                self._endpoints[direction].receive(packet), self._delay)
             # Decrement directional traffic
             self._traffic[direction] -= packet.size
 
@@ -176,51 +183,95 @@ class Link:
 
 
 class Flow(object):
-    """Simulator object representing a flow."""
+    """SimPy process representing a flow.
 
-    def __init__(self, id, env, src, dest, host, data=None):
-        self.env = env
+    Each flow process is connected to a source host, and generates as
+    many packets as are necessary to send all of its data.  If data is
+    None, a random, 8-bit number of packets are sent.
+    """
 
-        # flow id
-        self.id = id
-        # Source address
-        self.src = src
-        # Destination address
-        self.dest = dest
-        # Flow start time
-        self.start = env.now
-        # Owner host
-        self.host = host
-        # Queue to hold packets to transmit to use for flow control
-        self.packets = queue.Queue()
+    def __init__(self, env, host, dest, window, timeout, data):
+        self._env = env
+        # Flow host
+        self._host = host
+        # FLow destination
+        self._dest = dest
+        # Window size for this flow
+        self._window = window
+        # Time (in simulation time) to wait for an acknowledgement before
+        # retransmitting a packet
+        self._time = timeout
+        # Amount of data to transmit (bits)
+        self._data = data
 
-        # TODO: check data for a valid value
+        # Initialize packet generator
+        self._packets = self._generator()
+        # Initialize list of sent packets
+        self._sent = list()
+        # Register this flow with its host, and get its ID
+        self._id = self._host.register(self)
+        # Wait to receive acknowledgement
+        self._wait_for_ack = self._env.event()
 
-        # Flag to determine finite data output; None specifies infinite
-        # random data generation
-        self.data = None
+    def _generator(self):
+        """Create a packet generator.
+
+        If a data size is given, return a generator which yields
+        ceil(data size / packet size) packets.  If data size is None,
+        yield a random, 8-bit number of packets.
+
+        """
+        n = 0
+        if self._data == None:
+            # Pick a random 8-bit number of packets to send
+            n = random.getrandbits(8)
+        else:
+            # Calculate how many packets are needed to send self._data bits
+            n = math.ceil(self._data / resources.Packet.size)
+
+        # Create packet generator
+        g = (resources.Packet(self._host.addr, self._dest, self._id, i, 1)
+             for i in range(n))
+
+        return g
 
     def generate(self):
-        """Generate packets of size 1024 bytes to send."""
-
-        # create a new packet with the same environment, id, src, and dest
-        # make up some payload, and let it be "TESTING"
-        packet = Packet(self.env, self.id, self.src, self.dest, "TESTING") # TODO
-        
         while True:
-            # After generating the packet, the Flow requests access to the 
-            # host to send it.
-            with self.host.host.request() as req:
-                yield self.env.timeout(5)
-                yield req
-                
-                # Forwards the packet
-                yield self.env.process(self.host.transmit(packet))
-                
-                # Lets go of host after recieving acknowledgement
-                yield self.env.process(self.host.receiveack(self.env))
-            # TODO go back and add data collection.
+            try:
+                # Send as many packets as fit in our window
+                for i in range(self._window):
+                    # Generate the next packet to send
+                    packet = next(self._packets)
+                    # Append the packet to our sent list
+                    self._sent.append(packet)
+                    # Send the packet through the connected host
+                    yield self._env.process(self._host.receive(packet))
+                # Passivate packet generation
+                yield self._wait_for_ack
+            except StopIteration:
+                # Stop trying to send packets once we run out (last window
+                # is exhausted)
+                break
+        # Wait for the packets in the last window
+        yield self._wait_for_ack
 
-    def stop_and_wait(self, env, timeout):
-        """The simplest form of flow control of stop and wait"""
-        pass
+    def acknowledge(self, ack):
+        # Acknowledge the packet whose ACK was received
+        self._packets[ack.id] = None
+        # Wait for other acknowledgements
+        yield self._env.timeout(self._time)
+        # Determine which packets in this window have not been acknowledged
+        targets = filter(lambda p: p is not None, 
+                         self._packets[-self._window]))
+        # Resend dropped packets
+        for packet in targets:
+            yield self._env.process(self._host.receive(packet))
+
+        # TODO: congestion control algorithm should (potentially) modify
+        #       self._window here
+
+        # Continue sending more packets
+        self._wait_for_ack.succeed()
+        self._wait_for_ack = self._env.event()
+
+
