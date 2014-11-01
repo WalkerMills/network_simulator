@@ -128,31 +128,6 @@ class Link(object):
         self._endpoints[1].disconnect(self._down)
         self._endpoints = [None, None]
 
-    def receive(self, direction, packet):
-        """Receive a packet to transmit in a given direction."""
-        # Queue the new packet for transmission, and dequeue a packet
-        packet = yield self.res.transport(direction, packet)
-        # Transmit the dequeued packet
-        yield self.res._env.process(self._transmit(direction, packet))
-
-    def _transmit(self, direction, packet):
-        """Transmit a packet across the link in a given direction"""
-        # If the link isn't busy
-        if packet.size + self._traffic[direction] <= self._capacity:
-            # Increment directional traffic
-            self._traffic[direction] += packet.size
-            # # Wait as if transmitting packet across a physical link
-            # yield self.res._env.timeout(self._delay)
-            # # Transmit the packet
-            # yield self.res._env.process(
-            #     self._endpoints[direction].receive(packet))
-            # Transmit packet after waiting, as if sending the packet
-            # across a physical link
-            yield simpy.util.start_delayed(self.res._env,
-                self._endpoints[direction].receive(packet), self._delay)
-            # Decrement directional traffic
-            self._traffic[direction] -= packet.size
-
     def static_cost(self):
         """Calculate the static cost of this link.
 
@@ -180,6 +155,26 @@ class Link(object):
         Total cost is simply calculated as static cost + dynamic cost
         """
         return self.static_cost() + self.dynamic_cost(direction)
+
+    def receive(self, direction, packet):
+        """Receive a packet to transmit in a given direction."""
+        # Queue the new packet for transmission, and dequeue a packet
+        packet = yield self.res.transport(direction, packet)
+        # Transmit the dequeued packet
+        yield self.res._env.process(self._transmit(direction, packet))
+
+    def _transmit(self, direction, packet):
+        """Transmit a packet across the link in a given direction"""
+        # If the link isn't busy
+        if packet.size + self._traffic[direction] <= self._capacity:
+            # Increment directional traffic
+            self._traffic[direction] += packet.size
+            # Transmit packet after waiting, as if sending the packet
+            # across a physical link
+            yield simpy.util.start_delayed(self.res._env,
+                self._endpoints[direction].receive(packet), self._delay)
+            # Decrement directional traffic
+            self._traffic[direction] -= packet.size
 
 
 class Flow(object):
@@ -236,6 +231,7 @@ class Flow(object):
         return g
 
     def generate(self):
+        """Generate and transmit outbound data packets."""
         while True:
             try:
                 # Send as many packets as fit in our window
@@ -256,22 +252,26 @@ class Flow(object):
         yield self._wait_for_ack
 
     def acknowledge(self, ack):
+        """Receive an acknowledgement packet."""
         # Acknowledge the packet whose ACK was received
         self._packets[ack.id] = None
-        # Wait for other acknowledgements
-        yield self._env.timeout(self._time)
-        # Determine which packets in this window have not been acknowledged
-        targets = filter(lambda p: p is not None, 
-                         self._packets[-self._window]))
-        # Resend dropped packets
-        for packet in targets:
-            yield self._env.process(self._host.receive(packet))
 
-        # TODO: congestion control algorithm should (potentially) modify
-        #       self._window here
+        # If this ACK is not from a re-transmitted packet
+        if ack.id >= len(self._sent) - self._window:
+            # Wait for other acknowledgements
+            yield self._env.timeout(self._time)
+            # Determine which packets in this window have not been acknowledged
+            targets = filter(lambda p: p is not None, 
+                             self._packets[-self._window:]))
+            # Resend dropped packets
+            for packet in targets:
+                yield self._env.process(self._host.receive(packet))
 
-        # Continue sending more packets
-        self._wait_for_ack.succeed()
-        self._wait_for_ack = self._env.event()
+            # TODO: congestion control algorithm should (potentially) modify
+            #       self._window here
+
+            # Continue sending more packets
+            self._wait_for_ack.succeed()
+            self._wait_for_ack = self._env.event()
 
 
