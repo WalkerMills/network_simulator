@@ -6,9 +6,8 @@ import simpy
 
 import resources
 
-# TODO: log events to stderr, maybe a file eventually
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class Host(object):
@@ -63,6 +62,8 @@ class Host(object):
         packets.  Inbound data packets automatically generate an
         outbound acknowledgement.
         """
+        logger.info("host {} received packet {} at time {}".format(
+                self.addr, packet.id, self.res._env.now))
         # Queue new packet for transmission, and dequeue a packet. The
         # HostResource.receive event returns an outbound ACK if the
         # dequeued packet was an inbound data packet
@@ -73,9 +74,13 @@ class Host(object):
     def _transmit(self, packet):
         """Transmit a packet."""
         if packet.dest != self._addr:
+            logger.info("host {} transmitting packet {} at time {}".format(
+                self.addr, packet.id, self.res._env.now))
             # Transmit an outbound packet
             yield self.res._env.process(self._transport(packet))
         else:
+            logger.info("host {} transmitting ACK {} at time {}".format(
+                self.addr, packet.id, self.res._env.now))
             # Send an inbound ACK to its destination flow
             yield self.res._env.process(
                 self._flows[packet.flow].acknowledge(packet))
@@ -162,6 +167,8 @@ class Link(object):
 
     def receive(self, direction, packet):
         """Receive a packet to transmit in a given direction."""
+        logger.info("link received packet at time {}".format(
+            self.res._env.now))
         # Queue the new packet for transmission, and dequeue a packet
         packet = yield self.res.transport(direction, packet)
         # Transmit the dequeued packet
@@ -171,6 +178,8 @@ class Link(object):
         """Transmit a packet across the link in a given direction"""
         # If the link isn't busy
         if packet.size + self._traffic[direction] <= self._capacity:
+            logger.info("link transmitting packet at time {}".format(
+                self.res._env.now))
             # Increment directional traffic
             self._traffic[direction] += packet.size
             # Transmit packet after waiting, as if sending the packet
@@ -252,6 +261,10 @@ class Flow(object):
                 for i in range(self._window):
                     # Generate the next packet to send
                     packet = next(self._packets)
+                    logger.info(
+                        "flow {}, {} sending packet {} at time {}".format(
+                            self._id, self._host.addr, self._sent, 
+                            self._env.now))
                     # Increment the count of generated packets
                     self._sent += 1
                     # Add the packet to the map of unacknowedged packets
@@ -281,6 +294,8 @@ class Flow(object):
         previous window), it is marked as acknowledged, but does not
         trigger a timeout or packet generation.
         """
+        logger.info("flow {}, {} acknowledges packet {} at time {}".format(
+            self._id, self._host.addr, ack.id, self._env.now))
         # Acknowledge the packet whose ACK was received
         del self._outbound[ack.id]
 
@@ -312,6 +327,8 @@ class Flow(object):
         packets one more time, in an attempt to flush the unacknowedged
         packet list.
         """
+        logger.info("flow {}, {} flushing unacknowedged at time {}".format(
+            self._id, self._host.addr, self._env.now))
         # Retransmit any remaining unacknowedged packets
         for packet in self._outbound.values():
             yield self._env.process(self._host.receive(packet))

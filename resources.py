@@ -1,6 +1,10 @@
+import logging
 import queue
 import simpy
 import simpy.util
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 class Packet(object):
@@ -133,6 +137,9 @@ class HostResource(object):
 
         # If a data packet has reached its destination
         if event.packet.dest == self.addr and event.packet.size == Packet.size:
+            logger.info("host {} triggering acknowledgement for packet {} "
+                        "at time {}".format(self._addr, event.packet.id, 
+                                            self._env.now))
             # Send back an ackonwledgement packet
             event.succeed(event.packet.acknowledgement())
         else:
