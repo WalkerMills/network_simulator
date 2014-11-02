@@ -1,3 +1,4 @@
+import logging
 import math
 import queue
 import random
@@ -5,7 +6,10 @@ import simpy
 
 import resources
 
-# TODO: use processes to control interaction between network resources
+# TODO: log events to stderr, maybe a file eventually
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
 
 class Host(object):
     """SimPy process representing a host.
@@ -201,8 +205,10 @@ class Flow(object):
 
         # Initialize packet generator
         self._packets = self._generator()
-        # Initialize list of sent packets
-        self._sent = list()
+        # Dictionary of unacknowedged packets (maps ID -> packet)
+        self._outbound = dict()
+        # Number of packets generated so far
+        self._sent = 0
         # Register this flow with its host, and get its ID
         self._id = self._host.register(self)
         # Wait to receive acknowledgement
@@ -213,7 +219,7 @@ class Flow(object):
 
         If a data size is given, return a generator which yields
         ceil(data size / packet size) packets.  If data size is None,
-        yield a random, 8-bit number of packets.
+        it yields a random, 8-bit number of packets.
 
         """
         n = 0
@@ -231,15 +237,25 @@ class Flow(object):
         return g
 
     def generate(self):
-        """Generate and transmit outbound data packets."""
+        """Generate and transmit outbound data packets.
+
+        This generator gets up to <window size> packets from the internal
+        packet generator, and transmits each of them.  The process then
+        passivates until the acknowledgement of those packets reactivates
+        it.  Once all packets have been generated, and acknowledgements
+        received for the packets in the last window, any remaining
+        unacknowedged packets are transmitted one last time.
+        """
         while True:
             try:
                 # Send as many packets as fit in our window
                 for i in range(self._window):
                     # Generate the next packet to send
                     packet = next(self._packets)
-                    # Append the packet to our sent list
-                    self._sent.append(packet)
+                    # Increment the count of generated packets
+                    self._sent += 1
+                    # Add the packet to the map of unacknowedged packets
+                    self._outbound[packet.id] = packet
                     # Send the packet through the connected host
                     yield self._env.process(self._host.receive(packet))
                 # Passivate packet generation
@@ -250,21 +266,33 @@ class Flow(object):
                 break
         # Wait for the packets in the last window
         yield self._wait_for_ack
+        # Retransmit any remaining unacknowedged packets
+        yield self._env.process(self._flush())
 
     def acknowledge(self, ack):
-        """Receive an acknowledgement packet."""
+        """Receive an acknowledgement packet.
+
+        If an acknowledgement is received from a packet in the previous
+        window, this generator waits <timeout> units of simulation time
+        until declaring any unacknowedged packets dropped, and
+        retransmitting them.  Once finished transmitting any dropped
+        packets, packet generation is reactivated.  If an acknowledgement
+        is received from a retransmitted packet (i.e., outside the
+        previous window), it is marked as acknowledged, but does not
+        trigger a timeout or packet generation.
+        """
         # Acknowledge the packet whose ACK was received
-        self._packets[ack.id] = None
+        del self._outbound[ack.id]
 
         # If this ACK is not from a re-transmitted packet
-        if ack.id >= len(self._sent) - self._window:
+        if ack.id >= self._sent - self._window:
             # Wait for other acknowledgements
             yield self._env.timeout(self._time)
             # Determine which packets in this window have not been acknowledged
-            targets = filter(lambda p: p is not None, 
-                             self._packets[-self._window:]))
+            targets = filter(lambda i: i[0] >= self._sent - self._window, 
+                             self._outbound.items())
             # Resend dropped packets
-            for packet in targets:
+            for _, packet in targets:
                 yield self._env.process(self._host.receive(packet))
 
             # TODO: congestion control algorithm should (potentially) modify
@@ -274,4 +302,16 @@ class Flow(object):
             self._wait_for_ack.succeed()
             self._wait_for_ack = self._env.event()
 
+    def _flush(self):
+        """Flush the outbound packet list.
 
+        Dropped packets (no ACK received) are retransmitted once, after
+        acknowledge waits for packets in their window.  If they are
+        dropped twice, the packet remains in the flow's container of
+        unacknowedged packets.  This method retransmits all twice-dropped
+        packets one more time, in an attempt to flush the unacknowedged
+        packet list.
+        """
+        # Retransmit any remaining unacknowedged packets
+        for packet in self._outbound.values():
+            yield self._env.process(self._host.receive(packet))
