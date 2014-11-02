@@ -63,7 +63,8 @@ class Host(object):
         outbound acknowledgement.
         """
         logger.info("host {} received packet {} at time {}".format(
-                self.addr, packet.id, self.res._env.now))
+            self.addr, packet.id, self.res._env.now))
+
         # Queue new packet for transmission, and dequeue a packet. The
         # HostResource.receive event returns an outbound ACK if the
         # dequeued packet was an inbound data packet
@@ -72,15 +73,23 @@ class Host(object):
         yield self.res._env.process(self._transmit(packet))
 
     def _transmit(self, packet):
-        """Transmit a packet."""
+        """Transmit a packet.
+
+        Inbound data packets are replaced by an acknowledgement packet
+        when they exit the host's internal queue, so there are only two
+        cases: packets may be outbound, or they are ACK's destined for
+        a flow on this host.
+        """
         if packet.dest != self._addr:
             logger.info("host {} transmitting packet {} at time {}".format(
                 self.addr, packet.id, self.res._env.now))
+
             # Transmit an outbound packet
             yield self.res._env.process(self._transport(packet))
         else:
             logger.info("host {} transmitting ACK {} at time {}".format(
                 self.addr, packet.id, self.res._env.now))
+
             # Send an inbound ACK to its destination flow
             yield self.res._env.process(
                 self._flows[packet.flow].acknowledge(packet))
@@ -122,7 +131,7 @@ class Link(object):
 
     @property
     def endpoints(self):
-        """A list of connected endpoints (=< 1 per direction)"""
+        """A list of connected endpoints (up to 1 per direction)"""
         return self._endpoints
 
     def connect(self, proc0, proc1):
@@ -146,7 +155,7 @@ class Link(object):
         """
         try:
             return self._delay / self._capacity 
-        # If the link is down (capacity == 0 bps), return infinite cost
+        # If capacity is 0 bps, return infinite cost
         except ZeroDivisionError:
             return float("inf")
 
@@ -166,20 +175,34 @@ class Link(object):
         return self.static_cost() + self.dynamic_cost(direction)
 
     def receive(self, direction, packet):
-        """Receive a packet to transmit in a given direction."""
+        """Receive a packet to transmit in a given direction.
+
+        New packets are appended to one of the link's internal directional
+        buffer, and trigger the dequeuing of a packet from that buffer.
+        The dequeued packet is then sent across the link.  All link
+        buffers are drop-tail.
+        """
         logger.info("link received packet at time {}".format(
             self.res._env.now))
+
         # Queue the new packet for transmission, and dequeue a packet
         packet = yield self.res.transport(direction, packet)
         # Transmit the dequeued packet
         yield self.res._env.process(self._transmit(direction, packet))
 
     def _transmit(self, direction, packet):
-        """Transmit a packet across the link in a given direction"""
+        """Transmit a packet across the link in a given direction.
+
+        If the link isn't already at capacity, this generator triggers
+        a transmission event after a its link delay is elapsed, as if
+        sending a packet across a physical link with a propagation
+        delay.
+        """
         # If the link isn't busy
         if packet.size + self._traffic[direction] <= self._capacity:
             logger.info("link transmitting packet at time {}".format(
                 self.res._env.now))
+        
             # Increment directional traffic
             self._traffic[direction] += packet.size
             # Transmit packet after waiting, as if sending the packet
@@ -212,16 +235,57 @@ class Flow(object):
         # Amount of data to transmit (bits)
         self._data = data
 
+        # Register this flow with its host, and get its ID
+        self._id = self._host.register(self)
         # Initialize packet generator
         self._packets = self._generator()
         # Dictionary of unacknowedged packets (maps ID -> packet)
         self._outbound = dict()
         # Number of packets generated so far
         self._sent = 0
-        # Register this flow with its host, and get its ID
-        self._id = self._host.register(self)
-        # Wait to receive acknowledgement
+        # Wait to receive acknowledgement (passivation event)
         self._wait_for_ack = self._env.event()
+
+    @property
+    def dest(self):
+        """The destination address for this flow."""
+        return self._dest
+
+    @dest.setter
+    def dest(self, dest):
+        self._dest = dest
+
+    @property
+    def id(self):
+        """The ID of this flow, assigned by its host."""
+        return self._id
+
+    @property
+    def timeout(self):
+        """The time after which packets are considered dropped.
+
+        Once the first ACK in from the previous window is received, any
+        packet which is unacknowedged after <timeout> units of simulation
+        time is considered dropped, and may be resent.
+        """
+        return self._time
+
+    @timeout.setter
+    def timeout(self, timeout):
+        if time < 0:
+            raise ValueError("timeout must be >= 0")
+        self._time = timeout
+
+    @property
+    def window(self):
+        """Transmission window size, in packets"""
+        return self._window
+
+    @window.setter
+    def window(self, window):
+        if window < 1:
+            raise ValueError("window size must be >= 1")
+        self._window = window
 
     def _generator(self):
         """Create a packet generator.
@@ -265,6 +329,7 @@ class Flow(object):
                         "flow {}, {} sending packet {} at time {}".format(
                             self._id, self._host.addr, self._sent, 
                             self._env.now))
+
                     # Increment the count of generated packets
                     self._sent += 1
                     # Add the packet to the map of unacknowedged packets
@@ -296,6 +361,7 @@ class Flow(object):
         """
         logger.info("flow {}, {} acknowledges packet {} at time {}".format(
             self._id, self._host.addr, ack.id, self._env.now))
+
         # Acknowledge the packet whose ACK was received
         del self._outbound[ack.id]
 
@@ -329,6 +395,7 @@ class Flow(object):
         """
         logger.info("flow {}, {} flushing unacknowedged at time {}".format(
             self._id, self._host.addr, self._env.now))
+        
         # Retransmit any remaining unacknowedged packets
         for packet in self._outbound.values():
             yield self._env.process(self._host.receive(packet))

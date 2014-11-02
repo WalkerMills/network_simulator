@@ -140,6 +140,7 @@ class HostResource(object):
             logger.info("host {} triggering acknowledgement for packet {} "
                         "at time {}".format(self._addr, event.packet.id, 
                                             self._env.now))
+            
             # Send back an ackonwledgement packet
             event.succeed(event.packet.acknowledgement())
         else:
@@ -174,6 +175,7 @@ class RouterResource(object):
 
     @property
     def dynamic(self):
+        """Flag which indicates static or dynamic routing."""
         return self._dynamic
 
     @dynamic.setter
@@ -200,14 +202,6 @@ class RouterResource(object):
         self._table.pop(self._links[index])
         # Remove the link
         self._links.remove(self._links[index])
-
-
-    def route(self, dest, dynamic=False):
-        in_range = lambda l: dest in self._table[l[1]]
-        # TODO: dynamic routing updates link costs before choosing
-        out = min(filter(in_range, self._links))
-
-        return out
 
     def _transmit(self, packet):
         """Transmit an outbound packet."""
@@ -299,9 +293,11 @@ class LinkResource(object):
         return self._size
 
     def fill(self, direction):
+        """Returns the proportion of the buffer which is filled."""
         return self._fill[direction] / self.buffer
 
     def _receive(self, direction):
+        """Dequeue a packet and send it."""
         # Dequeue a packet
         event = self._packet_queues[direction].get_nowait()
         # Update buffer fill
