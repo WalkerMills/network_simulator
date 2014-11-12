@@ -229,7 +229,6 @@ class LinkTransport(simpy.events.Event):
         self._link = link
         self._direction = direction
         self._packet = packet
-
         # Enqueue the packet for transmission, if the buffer isn't full
         if link._fill[direction] + packet.size <= link.size:
             # Increment buffer fill

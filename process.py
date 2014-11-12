@@ -62,6 +62,7 @@ class Host(object):
         packets.  Inbound data packets automatically generate an
         outbound acknowledgement.
         """
+
         logger.info("host {} received packet {} at time {}".format(
             self.addr, packet.id, self.res._env.now))
 
@@ -69,8 +70,10 @@ class Host(object):
         # HostResource.receive event returns an outbound ACK if the
         # dequeued packet was an inbound data packet
         packet = yield self.res.receive(packet)
+
         # Transmit the dequeued packet
         yield self.res._env.process(self._transmit(packet))
+
 
     def _transmit(self, packet):
         """Transmit a packet.
@@ -80,16 +83,16 @@ class Host(object):
         cases: packets may be outbound, or they are ACK's destined for
         a flow on this host.
         """
+
         if packet.dest != self._addr:
             logger.info("host {} transmitting packet {} at time {}".format(
                 self.addr, packet.id, self.res._env.now))
-
             # Transmit an outbound packet
+
             yield self.res._env.process(self._transport(packet))
         else:
             logger.info("host {} transmitting ACK {} at time {}".format(
                 self.addr, packet.id, self.res._env.now))
-
             # Send an inbound ACK to its destination flow
             yield self.res._env.process(
                 self._flows[packet.flow].acknowledge(packet))
@@ -184,7 +187,6 @@ class Link(object):
         """
         logger.info("link received packet at time {}".format(
             self.res._env.now))
-
         # Queue the new packet for transmission, and dequeue a packet
         packet = yield self.res.transport(direction, packet)
         # Transmit the dequeued packet
@@ -202,7 +204,6 @@ class Link(object):
         if packet.size + self._traffic[direction] <= self._capacity:
             logger.info("link transmitting packet at time {}".format(
                 self.res._env.now))
-        
             # Increment directional traffic
             self._traffic[direction] += packet.size
             # Transmit packet after waiting, as if sending the packet
@@ -225,16 +226,18 @@ class Flow(object):
         self._env = env
         # Flow host
         self._host = host
-        # FLow destination
+        # FLow destination address
         self._dest = dest
-        # Window size for this flow
+        # Window size for this flow (in bits)
         self._window = window
+        # Slow start threshold. Make it a huge number so that we continue through
+        # the slow start phase
+        self._ssthresh = 9000000000
         # Time (in simulation time) to wait for an acknowledgement before
         # retransmitting a packet
         self._time = timeout
         # Amount of data to transmit (bits)
         self._data = data
-
         # Register this flow with its host, and get its ID
         self._id = self._host.register(self)
         # Initialize packet generator
@@ -245,6 +248,9 @@ class Flow(object):
         self._sent = 0
         # Wait to receive acknowledgement (passivation event)
         self._wait_for_ack = self._env.event()
+        # Congestion algorithm
+        # default to reno
+        self._congestion = "reno"
 
     @property
     def dest(self):
@@ -329,7 +335,6 @@ class Flow(object):
                         "flow {}, {} sending packet {} at time {}".format(
                             self._id, self._host.addr, self._sent, 
                             self._env.now))
-
                     # Increment the count of generated packets
                     self._sent += 1
                     # Add the packet to the map of unacknowedged packets
@@ -376,12 +381,17 @@ class Flow(object):
             for _, packet in targets:
                 yield self._env.process(self._host.receive(packet))
 
-            # TODO: congestion control algorithm should (potentially) modify
-            #       self._window here
+            # TODO: congestion control goes here
 
             # Continue sending more packets
             self._wait_for_ack.succeed()
             self._wait_for_ack = self._env.event()
+
+    def TCPreno(self):
+        self._window += 8192
+        logger.info("flow {}, window size increases to {} at time {}".format(
+            self._id, self._window, self._env.now))
+        
 
     def _flush(self):
         """Flush the outbound packet list.
