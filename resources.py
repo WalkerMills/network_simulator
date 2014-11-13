@@ -3,8 +3,8 @@ import queue
 import simpy
 import simpy.util
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 
 class Packet(object):
@@ -103,33 +103,48 @@ class ReceivePacket(simpy.events.Event):
     cancel = __exit__
 
 
-class HostResource(object):
-    """Resource representing a host.
-    
-    This is a host implemented as a unidirectional resource.  It receives
-    packets, but does not accept packet transmission requests.  Whenever
-    a packet is received, this resource returns a packet to be sent.  If
-    an inbound data packet is received, an acknowledgement is generated
-    and sent, and the data packet itself is discarded (data packets don't
-    have a destination flow)
+class PacketQueue(object):
+    """FIFO resource for processing packets.
 
+    This class is a FIFO resource. It receives packets, but does not
+    accept packet transmission requests.  Every packet arrival triggers
+    a packet transmission, at which time the next packet in the queue is
+    popped and returned.
     """
 
     def __init__(self, env, addr):
         self._env = env
-        # host address
+        # Router address
         self._addr = addr
-        # Queue to hold inbound packets to transmit
+        # Queue of packet events to process
         self._packets = list()
 
+        # Bind event constructors as methods
         simpy.core.BoundClass.bind_early(self)
 
     receive = simpy.core.BoundClass(ReceivePacket)
+    """Receive a packet."""
 
     @property
     def addr(self):
-        """The address of this host."""
+        """The address of this router."""
         return self._addr
+
+    def _receive(self):
+        """Receive a packet, and return a packet to be sent."""
+        event = self._packets.pop(0)
+        event.succeed(event.packet)
+
+
+class HostResource(PacketQueue):
+    """Resource representing a host.
+    
+    This is a FIFO resource which handles packets for a host.  If an
+    inbound data packet is received, an acknowledgement is generated and
+    sent, and the data packet itself is discarded (data packets don't
+    have a destination flow)
+
+    """
 
     def _receive(self):
         """Receive a packet, and return a packet to be sent."""
@@ -146,38 +161,6 @@ class HostResource(object):
         else:
             # Transmit the packet
             event.succeed(event.packet)
-
-
-class RouterResource(object):
-    """Resource representing a router.
-
-    This class is a router implemented as a unidirectional resource.
-    It receives packets, but does not accept packet transmission 
-    requests.  Every packet arrival triggers a packet transmission, at
-    which time the next packet in the queue is popped and returned.
-    """
-
-    def __init__(self, env, addr):
-        self._env = env
-        # Router address
-        self._addr = addr
-        # Queue of packet events to process
-        self._packets = list()
-
-        # Bind event constructors as methods
-        simpy.core.BoundClass.bind_early(self)
-
-    receive = simpy.core.BoundClass(ReceivePacket)
-
-    @property
-    def addr(self):
-        """The address of this router."""
-        return self._addr
-
-    def _receive(self):
-        """Receive a packet, and return a packet to be sent."""
-        event = self._packets.pop(0)
-        event.succeed(event.packet)
 
 
 class LinkTransport(simpy.events.Event):

@@ -6,8 +6,8 @@ import simpy
 
 import resources
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 
 class Host(object):
@@ -99,7 +99,7 @@ class Router(object):
     """Simpy process representing a router."""
 
     def __init__(self, env, addr):
-        self.res = resources.RouterResource(env, addr)
+        self.res = resources.PacketQueue(env, addr)
         # Address of this host
         self._addr = addr
         # List of outbound links
