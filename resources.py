@@ -270,10 +270,6 @@ class LinkResource(object):
     def __init__(self, env, buf_size):
         self._env = env
 
-        # Check buffer size for valid value
-        if buf_size <= 0:
-            raise ValueError("buffer size must be > 0")
-
         # Buffer size (bits)
         self._size = buf_size
         # Buffer fill (bits)
