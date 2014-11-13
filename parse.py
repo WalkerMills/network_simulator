@@ -1,1 +1,0 @@
-# TODO: instantiate network from parser output
