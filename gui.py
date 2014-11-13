@@ -1,3 +1,9 @@
+"""
+.. module:: gui
+    :platform: Unix
+    :synopsis: This module implements a GUI for drawing a network.
+"""
+
 import abc
 import logging
 import operator
@@ -17,8 +23,11 @@ class Dialog(tkinter.Toplevel, metaclass=abc.ABCMeta):
     method, and the actual processing/handling of input is done by the
     (abstract) apply method.
 
-    Source:
-        http://effbot.org/tkinterbook/tkinter-dialog-windows.htm
+    :param parent: parent of this widget
+    :type parent: tkinter.Widget
+    :param str title: dialog box title
+
+    `Source <http://effbot.org/tkinterbook/tkinter-dialog-windows.htm>`_
     """
 
     def __init__(self, parent, title=None):
@@ -60,11 +69,21 @@ class Dialog(tkinter.Toplevel, metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
     def body(self, master):
-        """Create dialog box body."""
+        """Create dialog box body.
+
+        :param master: parent of this widget
+        :type master: tkinter.Frame
+
+        :return: the widget with initial focus
+        :rtype: tkinter.Widget
+        """
         pass
 
     def buttons(self):
-        """Create dialog box buttons."""
+        """Create dialog box buttons.
+
+        :return: None
+        """
         # Initialize button container
         button_box = tkinter.Frame(self)
         # Create "Ok" button
@@ -83,8 +102,11 @@ class Dialog(tkinter.Toplevel, metaclass=abc.ABCMeta):
         # Bind esc key to the "Cancel" button
         self.bind("<Escape>", self.cancel)
 
-    def ok(self, event=None):
-        """Define the action of the \"Ok\" button."""
+    def ok(self):
+        """Define the action of the \"Ok\" button.
+
+        :return: None
+        """
         # If we got invalid data
         if not self.validate():
             # Reset focus
@@ -101,7 +123,10 @@ class Dialog(tkinter.Toplevel, metaclass=abc.ABCMeta):
         self.cancel()
 
     def cancel(self, event=None):
-        """Define the action of the \"Cancel\" button."""
+        """Define the action of the \"Cancel\" button.
+
+        :return: None
+        """
         # Return focus to the parent widget
         self.parent.focus_set()
         # Destroy this widget
@@ -109,12 +134,19 @@ class Dialog(tkinter.Toplevel, metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
     def validate(self):
-        """Validate the data entered in the dialog box."""
+        """Validate the data entered in the dialog box.
+
+        :return: True iff the data is valid
+        :rtype: bool
+        """
         pass
 
     @abc.abstractmethod
     def apply(self):
-        """Process the data entered in the dialog box."""
+        """Process the data entered in the dialog box.
+
+        :return: None
+        """
         pass
 
 
@@ -128,7 +160,14 @@ class InputDialog(Dialog):
         return int(getattr(self, "e{}".format(i)).get())
 
     def body(self, master):
-        """Create a labeled entry box for each field."""
+        """Create a labeled entry box for each field.
+
+        :param master: parent of this widget
+        :type master: tkinter.Frame
+
+        :return: the widget with initial focus
+        :rtype: tkinter.Widget
+        """
         for i, att in enumerate(self.fields):
             # Make a label for this attribute
             tkinter.Label(master, text=att + ":").grid(row=i)
@@ -138,15 +177,29 @@ class InputDialog(Dialog):
             # Position this entry field
             getattr(self, entry).grid(row=i, column=1)
 
+        if hasattr(self, 'e0'):
+            return self.e0
+
     def apply(self):
-        """Store the values entered in the entry fields."""
+        """Store the values entered in the entry fields.
+
+        :return: None
+        """
         # Store the entered parameters in this dialog's result
         self.result = [self._get_entry(i) for i in range(len(self.fields))]
 
 
 
 class NetworkInput(tkinter.Frame):
-    """This class implements a GUI to draw a network configuration."""
+    """This class implements a GUI to draw a network configuration.
+
+    :param master: Parent of this widget
+    :type master: tkinter.Tk
+    :param width_: Width of the GUI window
+    :type width_: int
+    :param height_: Height of the GUI window
+    :type height_: int
+    """
 
     class LinkDialog(InputDialog):
         """Dialog for specifying link parameters."""
@@ -154,7 +207,11 @@ class NetworkInput(tkinter.Frame):
         fields = ["Capacity", "Delay", "Buffer size"]
 
         def validate(self):
-            """Check that all values entered are >= 0"""
+            """Check that all values entered are >= 0.
+
+            :return: True iff the data is valid
+            :rtype: bool
+            """
             return all(map(lambda i: self._get_entry(i) >= 0,
                            range(len(self.fields))))
 
@@ -164,7 +221,11 @@ class NetworkInput(tkinter.Frame):
         fields = ["Window", "Timeout", "Data"]
 
         def validate(self):
-            """Check that all values entered are >= 0"""
+            """Check that all values entered are >= 0.
+
+            :return: True iff the data is valid
+            :rtype: bool
+            """
             return all(map(lambda i: self._get_entry(i) >= 0,
                            range(len(self.fields))))
 
@@ -200,12 +261,20 @@ class NetworkInput(tkinter.Frame):
 
     @property
     def links(self):
-        """The links connected on this canvas."""
+        """The links connected on this canvas.
+
+        :return: an adjacency list specifying the network topology
+        :rtype: list
+        """
         return self._links
 
     @property
     def flows(self):
-        """The flows defined on this canvas."""
+        """The flows defined on this canvas
+
+        :return: a list of flows defined in this network
+        :rtype: list
+        """
         return self._flows
 
     def _draw_component(self, x, y, color, tag):
@@ -214,7 +283,7 @@ class NetworkInput(tkinter.Frame):
             fill=color, tags=tag)
 
     def _find_item(self, x, y, tag, invert=False):
-        """Find an item (prefix) matching a given tag.
+        """Find a nearby item (prefix) matching a given tag.
 
         This method finds all items near the coordinates given, and
         returns the first tag of the closest item whose first tag prefix
@@ -240,21 +309,39 @@ class NetworkInput(tkinter.Frame):
         return None
 
     def draw_host(self, event):
-        """Draw a host."""
+        """Draw a host.
+
+        :param event: \"h\" keypress event
+        :type event: tkinter.Event
+
+        :return: None
+        """
         self._draw_component(event.x, event.y, "#66FF33",
                              "h{}".format(self._hosts))
         # Increment host count
         self._hosts += 1
 
     def draw_router(self, event):
-        """Draw a router."""
+        """Draw a router.
+
+        :param event: \"r\" keypress event
+        :type event: tkinter.Event
+
+        :return: None
+        """
         self._draw_component(event.x, event.y, "#3366FF",
                              "r{}".format(self._routers))
         # Increment router count
         self._routers += 1
 
     def draw_link(self, event):
-        """Draw a link."""
+        """Draw a link.
+
+        :param event: left mouse button click event
+        :type event: tkinter.Event
+
+        :return: None
+        """
         # If there is no link in progress
         if self._start is None:
             # The click event is the start point of a link
@@ -270,7 +357,7 @@ class NetworkInput(tkinter.Frame):
         # If we have two valid endpoints
         if len(link) == 2:
             # Get link parameters
-            dialog = NetworkInput.LinkDialog(self)
+            dialog = NetworkInput.LinkDialog(self, "Link Parameters")
             # If we got valid link parameters
             if dialog.result is not None:
                 logger.info("creating new link from {} to {}".format(*link))
@@ -289,7 +376,13 @@ class NetworkInput(tkinter.Frame):
         self._start = None
 
     def make_flow(self, event):
-        """Make a flow from one host to another."""
+        """Make a flow from one host to another.
+
+        :param event: right mouse button click event
+        :type event: tkinter.Event
+
+        :return: None
+        """
         # Find the closest host
         endpoint = self._find_item(event.x, event.y, "h")
 
@@ -302,7 +395,7 @@ class NetworkInput(tkinter.Frame):
                 return
 
             # Get flow parameters
-            dialog = NetworkInput.FlowDialog(self)
+            dialog = NetworkInput.FlowDialog(self, "Flow Parameters")
             # If we got valid flow parameters
             if dialog.result is not None:
                 logger.info("creating new flow from {} to {}".format(self._src,
@@ -315,9 +408,12 @@ class NetworkInput(tkinter.Frame):
         # Reset flow source
         self._src = None
 
-
 def draw():
-    """Draw the network configuration GUI."""
+    """Draw the network configuration GUI.
+
+    :return: returns drawn network as (adjacency list, flows)
+    :rtype: (list, list)
+    """
     # Initialize GUI
     master = tkinter.Tk()
     canvas = NetworkInput(master)

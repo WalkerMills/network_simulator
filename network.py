@@ -1,3 +1,9 @@
+"""
+.. module:: network
+    :platform: Unix
+    :synopsis: This module implements a network simulator
+"""
+
 import logging
 import simpy
 
@@ -9,6 +15,19 @@ logger = logging.getLogger(__name__)
 
 
 class Network(object):
+    """This class encapsulates a network simulation.
+
+    If network is None, then a GUI for drawing a network appears.  The
+    adjacency list should be formatted as [\"src,dest\", capacity, delay,
+    buffer size], where src & dest are formatted as a string with a
+    leading \"h\" or \"r\", specifying a host or router, followed by an
+    integer id.  Flows should be given as [\"src,dest\", window, timeout,
+    data], where src & dest are formatted as previously, but only host
+    tags are allowed.
+
+    :param network: tuple of adjacency list of links, flows
+    :type network: ([str, int, int, int], [str, int, int, int])
+    """
 
     def __init__(self, network=None):
         # Simulation environment
@@ -32,6 +51,7 @@ class Network(object):
         self._build_network(edges, flows)
 
     def _build_network(self, edges, flows):
+        """Build a network of SimPy processes."""
         # Set of host addresses
         hosts = set()
         # Set of router addresses
@@ -46,9 +66,9 @@ class Network(object):
             for node in endpoints:
                 # Add the tag's address to the appropriate set
                 if node.startswith('h'):
-                    hosts.add(int(node[1]))
+                    hosts.add(int(node[1:]))
                 else:
-                    routers.add(int(node[1]))
+                    routers.add(int(node[1:]))
 
         # For each host address
         for addr in hosts:
@@ -73,7 +93,7 @@ class Network(object):
             # Add an endpoint for each tag 
             for tag in tags:
                 # Retrieve the address from this tag
-                addr = int(tag[1])
+                addr = int(tag[1:])
                 # If it's a host tag
                 if tag.startswith("h"):
                     # Append the host with the tagged address
@@ -82,7 +102,7 @@ class Network(object):
                 # Otherwise, it's a router
                 else:
                     # Append the router with the tagged address
-                    endpoints.append(self._routers[int(tag[1])])
+                    endpoints.append(self._routers[addr])
                     log_args.append("router")
                 log_args.append(addr)
 
@@ -104,7 +124,13 @@ class Network(object):
             self._flows.append(process.Flow(self._env, src, dest, *parameters))
 
     def simulate(self, until=None):
+        """Run the initialized simulation.
+
+        :param int until: The time to run the simulation until
+        """
         # Initialize packet generating processes for each flow
         processes = [self._env.process(f.generate()) for f in self._flows]
         # Run the simulation
         self._env.run()
+        # Reset the environment
+        self._env = simpy.Environment()
