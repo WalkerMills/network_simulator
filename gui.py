@@ -3,8 +3,8 @@ import logging
 import operator
 import tkinter
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 
 class Dialog(tkinter.Toplevel, metaclass=abc.ABCMeta):
@@ -151,7 +151,7 @@ class NetworkInput(tkinter.Frame):
     class LinkDialog(InputDialog):
         """Dialog for specifying link parameters."""
 
-        fields = ["Capacity', 'Delay', 'Buffer size"]
+        fields = ["Capacity", "Delay", "Buffer size"]
 
         def validate(self):
             """Check that all values entered are >= 0"""
@@ -161,7 +161,7 @@ class NetworkInput(tkinter.Frame):
     class FlowDialog(InputDialog):
         """Dialog for specifying flow parameters"""
 
-        fields = ["Window', 'Timeout', 'Data"]
+        fields = ["Window", "Timeout", "Data"]
 
         def validate(self):
             """Check that all values entered are >= 0"""
@@ -172,7 +172,7 @@ class NetworkInput(tkinter.Frame):
         # Initialize GUI
         super(NetworkInput, self).__init__(master)
         self.canvas = tkinter.Canvas(self, width=width_, height=height_)
-        self.canvas.pack(fill="both', expand='1")
+        self.canvas.pack(fill="both", expand="1")
 
         # Side length of hosts & routers in pixels
         self._dim = 10
@@ -321,7 +321,7 @@ def draw():
     # Initialize GUI
     master = tkinter.Tk()
     canvas = NetworkInput(master)
-    canvas.pack(fill="both', expand='1")
+    canvas.pack(fill="both", expand="1")
     # Run GUI
     tkinter.mainloop()
     return canvas.links, canvas.flows
