@@ -185,9 +185,9 @@ class NetworkInput(tkinter.Frame):
         # Current number of routers
         self._routers = 0
         # Adjacency list (implicitly) representing links
-        self.links = list()
+        self._links = list()
         # List of flows in the network
-        self.flows = list()
+        self._flows = list()
 
         # Bind "h" key to host creation
         self.master.bind("h", self.draw_host)
@@ -197,6 +197,16 @@ class NetworkInput(tkinter.Frame):
         self.canvas.bind("<Button-1>", self.draw_link)
         # Bind right mouse button to flow creation
         self.canvas.bind("<Button-3>", self.make_flow)
+
+    @property
+    def links(self):
+        """The links connected on this canvas."""
+        return self._links
+
+    @property
+    def flows(self):
+        """The flows defined on this canvas."""
+        return self._flows
 
     def _draw_component(self, x, y, color, tag):
         """Draw a rectangular component."""
@@ -270,7 +280,7 @@ class NetworkInput(tkinter.Frame):
                                         event.x, event.y, fill="black", 
                                         tags="l," + link)
                 # Update the list of links
-                self.links.append([link] + dialog.result)
+                self._links.append([link] + dialog.result)
             else:
                 logger.info("link creation failed; invalid link parameters")
         else:
