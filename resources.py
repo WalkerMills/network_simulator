@@ -154,19 +154,15 @@ class RouterResource(object):
     This class is a router implemented as a unidirectional resource.
     It receives packets, but does not accept packet transmission 
     requests.  Every packet arrival triggers a packet transmission, at
-    which time the next packet in the queue is popped, routed, and sent
-    through the appropriate link.
+    which time the next packet in the queue is popped and returned.
     """
 
-    def __init__(self, env, dynamic=False):
+    def __init__(self, env, addr):
         self._env = env
-        self._dynamic = dynamic
+        # Router address
+        self._addr = addr
         # Queue of packet events to process
         self._packets = list()
-        # List of outbound links of the form (link cost, link)
-        self._links = list()
-        # Dictionary mapping outbound links to destination ranges
-        self._table = dict()
 
         # Bind event constructors as methods
         simpy.core.BoundClass.bind_early(self)
@@ -174,45 +170,14 @@ class RouterResource(object):
     receive = simpy.core.BoundClass(ReceivePacket)
 
     @property
-    def dynamic(self):
-        """Flag which indicates static or dynamic routing."""
-        return self._dynamic
+    def addr(self):
+        """The address of this router."""
+        return self._addr
 
-    @dynamic.setter
-    def dynamic(self, d):
-        if d not in [True, False]:
-            raise ValueError("Invalid dynamic flag value.")
-
-        self._dynamic = d
-
-    @property
-    def links(self):
-        """A list of tuples of the form (static cost, link)."""
-        return self._links
-
-    @links.setter
-    def links(self, link):
-        self._links.append((link.static_cost(), link))
-        # TODO: add endpoints reachable through the link to self._table
-        self._table[link] = [None]
-
-    def disconnect(self, index):
-        """Disconnect a link from this router, if it exists."""
-        # Remove routing information for this link, if extant
-        self._table.pop(self._links[index])
-        # Remove the link
-        self._links.remove(self._links[index])
-
-    def _transmit(self, packet):
-        """Transmit an outbound packet."""
-        # TODO: route packet & transmit it through a link
-        pass
-
-    def _trigger_transmit(self):
-        """Trigger outbound packet transmission."""
+    def _receive(self):
+        """Receive a packet, and return a packet to be sent."""
         event = self._packets.pop(0)
-        self._transmit(event.packet)
-        event.succeed()
+        event.succeed(event.packet)
 
 
 class LinkTransport(simpy.events.Event):

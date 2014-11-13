@@ -67,24 +67,24 @@ class Dialog(tkinter.Toplevel, metaclass=abc.ABCMeta):
         """Create dialog box buttons."""
         # Initialize button container
         button_box = tkinter.Frame(self)
-        # Create 'Ok' button
-        widget = tkinter.Button(button_box, text='Ok', width=10,
+        # Create "Ok" button
+        widget = tkinter.Button(button_box, text="Ok", width=10,
                                 command=self.ok, default=tkinter.ACTIVE)
         widget.pack(side=tkinter.LEFT, padx=5, pady=5)
-        # Create 'Cancel' button
-        widget = tkinter.Button(button_box, text='Cancel', width=10,
+        # Create "Cancel" button
+        widget = tkinter.Button(button_box, text="Cancel", width=10,
                                 command=self.cancel)
         widget.pack(side=tkinter.LEFT, padx=5, pady=5)
         # Build button container
         button_box.pack()
 
-        # Bind enter key to the 'Ok' button
-        self.bind('<Return>', self.ok)
-        # Bind esc key to the 'Cancel' button
-        self.bind('<Escape>', self.cancel)
+        # Bind enter key to the "Ok" button
+        self.bind("<Return>", self.ok)
+        # Bind esc key to the "Cancel" button
+        self.bind("<Escape>", self.cancel)
 
     def ok(self, event=None):
-        """Define the action of the \'Ok\' button."""
+        """Define the action of the \"Ok\" button."""
         # If we got invalid data
         if not self.validate():
             # Reset focus
@@ -101,7 +101,7 @@ class Dialog(tkinter.Toplevel, metaclass=abc.ABCMeta):
         self.cancel()
 
     def cancel(self, event=None):
-        """Define the action of the \'Cancel\' button."""
+        """Define the action of the \"Cancel\" button."""
         # Return focus to the parent widget
         self.parent.focus_set()
         # Destroy this widget
@@ -125,15 +125,15 @@ class InputDialog(Dialog):
 
     def _get_entry(self, i):
         """Get the (integer) value of the ith entry field."""
-        return int(getattr(self, 'e{}'.format(i)).get())
+        return int(getattr(self, "e{}".format(i)).get())
 
     def body(self, master):
         """Create a labeled entry box for each field."""
         for i, att in enumerate(self.fields):
             # Make a label for this attribute
-            tkinter.Label(master, text=att + ':').grid(row=i)
+            tkinter.Label(master, text=att + ":").grid(row=i)
             # Make an entry field for this attribute
-            entry = 'e{}'.format(i)
+            entry = "e{}".format(i)
             setattr(self, entry, tkinter.Entry(master))
             # Position this entry field
             getattr(self, entry).grid(row=i, column=1)
@@ -151,7 +151,7 @@ class NetworkInput(tkinter.Frame):
     class LinkDialog(InputDialog):
         """Dialog for specifying link parameters."""
 
-        fields = ['Capacity', 'Delay', 'Buffer size']
+        fields = ["Capacity', 'Delay', 'Buffer size"]
 
         def validate(self):
             """Check that all values entered are >= 0"""
@@ -161,7 +161,7 @@ class NetworkInput(tkinter.Frame):
     class FlowDialog(InputDialog):
         """Dialog for specifying flow parameters"""
 
-        fields = ['Window', 'Timeout', 'Data']
+        fields = ["Window', 'Timeout', 'Data"]
 
         def validate(self):
             """Check that all values entered are >= 0"""
@@ -172,7 +172,7 @@ class NetworkInput(tkinter.Frame):
         # Initialize GUI
         super(NetworkInput, self).__init__(master)
         self.canvas = tkinter.Canvas(self, width=width_, height=height_)
-        self.canvas.pack(fill='both', expand='1')
+        self.canvas.pack(fill="both', expand='1")
 
         # Side length of hosts & routers in pixels
         self._dim = 10
@@ -189,14 +189,14 @@ class NetworkInput(tkinter.Frame):
         # List of flows in the network
         self.flows = list()
 
-        # Bind 'h' key to host creation
-        self.master.bind('h', self.draw_host)
-        # Bind 'r' key to router creation
-        self.master.bind('r', self.draw_router)
+        # Bind "h" key to host creation
+        self.master.bind("h", self.draw_host)
+        # Bind "r" key to router creation
+        self.master.bind("r", self.draw_router)
         # Bind left mouse button to link creation
-        self.canvas.bind('<Button-1>', self.draw_link)
+        self.canvas.bind("<Button-1>", self.draw_link)
         # Bind right mouse button to flow creation
-        self.canvas.bind('<Button-3>', self.make_flow)
+        self.canvas.bind("<Button-3>", self.make_flow)
 
     def _draw_component(self, x, y, color, tag):
         """Draw a rectangular component."""
@@ -231,15 +231,15 @@ class NetworkInput(tkinter.Frame):
 
     def draw_host(self, event):
         """Draw a host."""
-        self._draw_component(event.x, event.y, '#66FF33',
-                             'h{}'.format(self._hosts))
+        self._draw_component(event.x, event.y, "#66FF33",
+                             "h{}".format(self._hosts))
         # Increment host count
         self._hosts += 1
 
     def draw_router(self, event):
         """Draw a router."""
-        self._draw_component(event.x, event.y, '#3366FF',
-                             'r{}'.format(self._routers))
+        self._draw_component(event.x, event.y, "#3366FF",
+                             "r{}".format(self._routers))
         # Increment router count
         self._routers += 1
 
@@ -253,7 +253,7 @@ class NetworkInput(tkinter.Frame):
 
         link = list()
         for point in self._start, (event.x, event.y):
-            endpoint = self._find_item(point[0], point[1], 'l', invert=True)
+            endpoint = self._find_item(point[0], point[1], "l", invert=True)
             if endpoint is not None:
                 link.append(endpoint)
 
@@ -263,25 +263,25 @@ class NetworkInput(tkinter.Frame):
             dialog = NetworkInput.LinkDialog(self)
             # If we got valid link parameters
             if dialog.result is not None:
-                logger.info('creating new link from {} to {}'.format(*link))
-                link = ','.join(link)
+                logger.info("creating new link from {} to {}".format(*link))
+                link = ",".join(link)
                 # Draw a link in the GUI
                 self.canvas.create_line(self._start[0], self._start[1], 
-                                        event.x, event.y, fill='black', 
-                                        tags='l,' + link)
+                                        event.x, event.y, fill="black", 
+                                        tags="l," + link)
                 # Update the list of links
                 self.links.append([link] + dialog.result)
             else:
-                logger.info('link creation failed; invalid link parameters')
+                logger.info("link creation failed; invalid link parameters")
         else:
-            logger.info('link creation failed; endpoints not valid')
+            logger.info("link creation failed; endpoints not valid")
         # Reset start coordinates
         self._start = None
 
     def make_flow(self, event):
         """Make a flow from one host to another."""
         # Find the closest host
-        endpoint = self._find_item(event.x, event.y, 'h')
+        endpoint = self._find_item(event.x, event.y, "h")
 
         # If we found a host
         if endpoint is not None:
@@ -295,12 +295,13 @@ class NetworkInput(tkinter.Frame):
             dialog = NetworkInput.FlowDialog(self)
             # If we got valid flow parameters
             if dialog.result is not None:
-                logger.info('creating new flow from {} to {}'.format(self._src,
+                logger.info("creating new flow from {} to {}".format(self._src,
                                                                      endpoint))
                 # Update the list of flows
-                self.flows.append([self._src + ',' + endpoint] + dialog.result)
+                self._flows.append(
+                    [self._src + "," + endpoint] + dialog.result)
         else:
-            logger.info('invalid flow endpoint')
+            logger.info("invalid flow endpoint")
         # Reset flow source
         self._src = None
 
@@ -310,7 +311,7 @@ def draw():
     # Initialize GUI
     master = tkinter.Tk()
     canvas = NetworkInput(master)
-    canvas.pack(fill='both', expand='1')
+    canvas.pack(fill="both', expand='1")
     # Run GUI
     tkinter.mainloop()
     return canvas.links, canvas.flows

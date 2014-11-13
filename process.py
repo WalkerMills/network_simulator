@@ -95,6 +95,63 @@ class Host(object):
                 self._flows[packet.flow].acknowledge(packet))
 
 
+class Router(object):
+    """Simpy process representing a router."""
+
+    def __init__(self, env, addr):
+        self.res = resources.RouterResource(env, addr)
+        # Address of this host
+        self._addr = addr
+        # List of outbound links
+        self._links = list()
+        # Dictionary mapping outbound links to destinations
+        self._table = dict()
+
+    @property
+    def addr(self):
+        """The address of this router."""
+        return self._addr
+
+    def connect(self, transport):
+        """Connect an outbound link."""
+        # If this link isn't already connected
+        if transport not in self._links:
+            # Connect it to a new "port"
+            self._links.append(transport)
+
+    def disconnect(self, transport):
+        """Disconnect an outbound link."""
+        # If the given transport handler is connected, remove it
+        self._links.remove(transport)
+        try:
+            # Delete this outbound link from the routing table, if it exists
+            del self._table[transport]
+        except KeyError:
+            pass
+
+    def receive(self, packet):
+        """Receive a packet."""
+        logger.info("router {} received packet {} at time {}".format(
+            self.addr, packet.id, self.res._env.now))
+        # Push another packet through the queue
+        packet = yield self.res.receive(packet)
+        # Transmit the dequeued packet
+        yield self.res._env.process(self._transmit(packet))
+
+    def _route(self, address):
+        # TODO: return a transport handler based on the given address
+        pass
+
+    def _transmit(self, packet):
+        """Transmit an outbound packet."""
+        # TODO: handle routing packets
+
+        # Determine which transport handler to pass this packet to
+        transport = self._route(packet.addr)
+        # Send the packet
+        yield self.res._env.process(transport(packet))
+
+
 class Link(object):
     """SimPy process representing a link.
 
@@ -114,9 +171,9 @@ class Link(object):
 
         # Endpoints for each direction
         self._endpoints = [None, None]
-        # 'Upload' handler
+        # "Upload" handler
         self._up = lambda p: self.receive(1, p)
-        # 'Download' handler
+        # "Download" handler
         self._down = lambda p: self.receive(0, p)
 
     @property
