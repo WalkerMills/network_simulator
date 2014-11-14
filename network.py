@@ -25,7 +25,7 @@ class Network(object):
     data], where src & dest are formatted as previously, but only host
     tags are allowed.
 
-    :param network: tuple of adjacency list of links, flows
+    :param network: adjacency lists of links & flows defining a network
     :type network: ([str, int, int, int], [str, int, int, int])
     """
 

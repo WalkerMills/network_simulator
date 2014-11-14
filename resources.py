@@ -8,7 +8,15 @@ logger = logging.getLogger(__name__)
 
 
 class Packet(object):
-    """This class represents a packet in our simulation."""
+    """This class represents a packet in our simulation.
+
+    :param src: source host
+    :type src: :class:`process.Host`
+    :param int dest: destination address
+    :param int fid: source flow id
+    :param int pid: packet id
+    :param object payload: packet payload
+    """
 
     # Simulated packet size (bits)
     size = 8192
@@ -51,11 +59,23 @@ class Packet(object):
         return self._data
 
     def acknowledgement(self):
+        """Generate an acknowledgement for this packet.
+
+        :return: An acknowledgement packet matching this packet
+        :rtype: :class:`ACK`
+        """
         return ACK(self._dest, self._src, self._flow, self._id)
 
 
 class ACK(Packet):
-    """This class represents an acknowledgement packet."""
+    """This class represents an acknowledgement packet.
+
+    :param src: source host
+    :type src: :class:`process.Host`
+    :param int dest: destination address
+    :param int fid: source flow id
+    :param int pid: packet id
+    """
 
     # Simulated acknowledgement packet size (bits)
     size = 512
@@ -80,6 +100,11 @@ class ReceivePacket(simpy.events.Event):
     arrival of a packet at that resource.  It also triggers a packet
     transmission for each packet received.  This event may also be used
     as a context manager.
+
+    :param object resource: 
+        an object with a _packet attribute (container) and a _receive method
+    :param packet: a packet to handle
+    :type packet: :class:`Packet`
     """
 
     def __init__(self, resource, packet):
@@ -110,6 +135,9 @@ class PacketQueue(object):
     accept packet transmission requests.  Every packet arrival triggers
     a packet transmission, at which time the next packet in the queue is
     popped and returned.
+
+    :param simpy.Environment env: the simulation environment
+    :param int addr: the address of this resource
     """
 
     def __init__(self, env, addr):
@@ -144,6 +172,8 @@ class HostResource(PacketQueue):
     sent, and the data packet itself is discarded (data packets don't
     have a destination flow)
 
+    :param simpy.Environment env: the simulation environment
+    :param int addr: the address of this host
     """
 
     def _receive(self):
@@ -167,8 +197,14 @@ class LinkTransport(simpy.events.Event):
     """Simulator event representing directional packet transmission.
 
     This event takes a resource as a parameter, and represents the
-    transmission of a packet arcoss a full-duplex link, through the
-    use of a limited size buffer.  Buffer overflows are dropped.
+    transmission of a packet arcoss one direction of a full-duplex link,
+    through the use of a limited size, drop-tail buffer.
+
+    :param link: the link that this transport handler binds to
+    :type link: :class:`LinkResource`
+    :param bool direction: the (binary) direction of this transport handler
+    :param packet: the packet to transport
+    :type packet: :class:`Packet`
     """
 
     def __init__(self, link, direction, packet):
@@ -212,7 +248,10 @@ class LinkResource(object):
 
     This class is a full-duplex link implemented as a resource.  Packet
     transmission is parametrized by direction, and each link has two
-    allowed directions (0 or 1)
+    allowed directions (0 or 1), each of which has a dedicated buffer.
+
+    :param simpy.Environment env: the simulation environment
+    :param int buf_size: link buffer size, in bits
     """
 
     def __init__(self, env, buf_size):
@@ -237,8 +276,12 @@ class LinkResource(object):
         return self._size
 
     def fill(self, direction):
-        """Returns the proportion of the buffer which is filled."""
-        return self._fill[direction] / self.buffer
+        """Returns the proportion of the buffer which is filled.
+
+        :return: buffer fill as a proportion of buffer size
+        :rtype: float
+        """
+        return self._fill[direction] / self._size
 
     def _receive(self, direction):
         """Dequeue a packet and send it."""
