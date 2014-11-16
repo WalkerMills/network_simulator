@@ -12,7 +12,7 @@ $ sudo apt-get install python3 python3-simpy python3-sphinx -y
 
 On Arch Linux:
 
-# sudo pacman -S simpy python-sphinx --noconfirm
+$ sudo pacman -S simpy python-sphinx --noconfirm
 
 ## Documentation
 
