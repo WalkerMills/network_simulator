@@ -4,7 +4,7 @@ Network simulator project for Caltech CS/EE 143.
 
 ## Dependencies
 
-This project requires Python >= 3.2, SimPy >= 3.0, and Sphinx >= 1.2, and Tkinter
+This project requires Python >= 3.2, SimPy >= 3.0, Sphinx >= 1.2, and Tkinter
 
 On Ubuntu:
 
