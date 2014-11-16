@@ -102,7 +102,7 @@ class Dialog(tkinter.Toplevel, metaclass=abc.ABCMeta):
         # Bind esc key to the "Cancel" button
         self.bind("<Escape>", self.cancel)
 
-    def ok(self):
+    def ok(self, event=None):
         """Define the action of the \"Ok\" button.
 
         :return: None
@@ -151,43 +151,89 @@ class Dialog(tkinter.Toplevel, metaclass=abc.ABCMeta):
 
 
 class InputDialog(Dialog):
-    """Dialog for entering field data."""
+    """Dialog for entering field data.
 
-    fields = list()
+    :param parent: parent of this widget
+    :type parent: tkinter.Widget
+    :param str title: dialog box title
+    """
+
+    labels = list()
 
     def _get_entry(self, i):
         """Get the (integer) value of the ith entry field."""
         return int(getattr(self, "e{}".format(i)).get())
 
     def body(self, master):
-        """Create a labeled entry box for each field.
+        """Create a labeled entry box for each label.
 
         :param master: parent of this widget
         :type master: tkinter.Frame
 
-        :return: the widget with initial focus
+        :return: the entry field with initial focus, or None
         :rtype: tkinter.Widget
         """
-        for i, att in enumerate(self.fields):
-            # Make a label for this attribute
-            tkinter.Label(master, text=att + ":").grid(row=i)
+        for i, lalbel in enumerate(self.labels):
+            # Make a label in the label box for this field
+            tkinter.Label(master, text=label + ":").grid(row=i)
             # Make an entry field for this attribute
-            entry = "e{}".format(i)
+            entry = "f{}".format(i)
             setattr(self, entry, tkinter.Entry(master))
             # Position this entry field
             getattr(self, entry).grid(row=i, column=1)
 
-        if hasattr(self, 'e0'):
-            return self.e0
+        if hasattr(self, 'f0'):
+            return self.f0
 
     def apply(self):
-        """Store the values entered in the entry fields.
+        """Store the values entered in the entry labels.
 
         :return: None
         """
         # Store the entered parameters in this dialog's result
-        self.result = [self._get_entry(i) for i in range(len(self.fields))]
+        self.result = [self._get_entry(i) for i in range(len(self.labels))]
 
+
+class FlowDialog(InputDialog):
+    """Dialog for specifying flow parameters.
+
+    :param parent: parent of this widget
+    :type parent: tkinter.Widget
+    :param str title: dialog box title
+    """
+
+    labels = ["Data", "Window", "Timeout", "Initial delay"]
+    """Flow positional parameters (label names)."""
+
+    def validate(self):
+        """Check that all values entered are >= 0.
+
+        :return: True iff the data is valid
+        :rtype: bool
+        """
+        return all(map(lambda i: self._get_entry(i) >= 0,
+                       range(len(self.labels))))
+
+
+class LinkDialog(InputDialog):
+    """Dialog for specifying link parameters.
+
+    :param parent: parent of this widget
+    :type parent: tkinter.Widget
+    :param str title: dialog box title
+    """
+
+    labels = ["Capacity", "Buffer size", "Delay"]
+    """Link positional parameters (label names)."""
+
+    def validate(self):
+        """Check that all values entered are >= 0.
+
+        :return: True iff the data is valid
+        :rtype: bool
+        """
+        return all(map(lambda i: self._get_entry(i) >= 0,
+                       range(len(self.labels))))
 
 
 class NetworkInput(tkinter.Frame):
@@ -200,34 +246,6 @@ class NetworkInput(tkinter.Frame):
     :param height_: Height of the GUI window
     :type height_: int
     """
-
-    class LinkDialog(InputDialog):
-        """Dialog for specifying link parameters."""
-
-        fields = ["Capacity", "Delay", "Buffer size"]
-
-        def validate(self):
-            """Check that all values entered are >= 0.
-
-            :return: True iff the data is valid
-            :rtype: bool
-            """
-            return all(map(lambda i: self._get_entry(i) >= 0,
-                           range(len(self.fields))))
-
-    class FlowDialog(InputDialog):
-        """Dialog for specifying flow parameters"""
-
-        fields = ["Window", "Timeout", "Data"]
-
-        def validate(self):
-            """Check that all values entered are >= 0.
-
-            :return: True iff the data is valid
-            :rtype: bool
-            """
-            return all(map(lambda i: self._get_entry(i) >= 0,
-                           range(len(self.fields))))
 
     def __init__(self, master, width_=600, height_=400):
         # Initialize GUI
@@ -357,17 +375,16 @@ class NetworkInput(tkinter.Frame):
         # If we have two valid endpoints
         if len(link) == 2:
             # Get link parameters
-            dialog = NetworkInput.LinkDialog(self, "Link Parameters")
+            dialog = LinkDialog(self, "Link Parameters")
             # If we got valid link parameters
             if dialog.result is not None:
                 logger.info("creating new link from {} to {}".format(*link))
-                link = ",".join(link)
                 # Draw a link in the GUI
                 self.canvas.create_line(self._start[0], self._start[1], 
                                         event.x, event.y, fill="black", 
-                                        tags="l," + link)
+                                        tags="l," + ','.join(link))
                 # Update the list of links
-                self._links.append([link] + dialog.result)
+                self._links.append((tuple(link), tuple(dialog.result)))
             else:
                 logger.info("link creation failed; invalid link parameters")
         else:
@@ -395,14 +412,14 @@ class NetworkInput(tkinter.Frame):
                 return
 
             # Get flow parameters
-            dialog = NetworkInput.FlowDialog(self, "Flow Parameters")
+            dialog = FlowDialog(self, "Flow Parameters")
             # If we got valid flow parameters
             if dialog.result is not None:
                 logger.info("creating new flow from {} to {}".format(self._src,
                                                                      endpoint))
                 # Update the list of flows
-                self._flows.append(
-                    [self._src + "," + endpoint] + dialog.result)
+                self._flows.append(((self._src, endpoint), 
+                                    tuple(dialog.result)))
         else:
             logger.info("invalid flow endpoint")
         # Reset flow source
