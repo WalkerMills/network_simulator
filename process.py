@@ -516,3 +516,15 @@ class Router(object):
         # TODO: return a transport handler based on the given address
 
         pass
+
+    def transmit(self, packet):     
+        """Transmit an outbound packet.        
+       
+        :param packet: the outbound packet     
+        :type packet: :class:`resources.Packet`        
+        :return: None      
+        """        
+        # Determine which transport handler to pass this packet to     
+        transport = self._route(packet.addr)       
+        # Send the packet      
+        yield self.res._env.process(transport(packet))
