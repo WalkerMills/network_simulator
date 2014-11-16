@@ -4,15 +4,15 @@ Network simulator project for Caltech CS/EE 143.
 
 ## Dependencies
 
-This project requires Python >= 3.2, SimPy >= 3.0, and Sphinx >= 1.2
+This project requires Python >= 3.2, SimPy >= 3.0, and Sphinx >= 1.2, and Tkinter
 
 On Ubuntu:
 
-$ sudo apt-get install python3 python3-simpy python3-sphinx -y
+$ sudo apt-get install python3 python3-simpy python3-sphinx python3-tk -y
 
 On Arch Linux:
 
-$ sudo pacman -S simpy python-sphinx --noconfirm
+$ sudo pacman -S simpy python-sphinx python-pmw --noconfirm
 
 ## Documentation
 
