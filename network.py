@@ -18,18 +18,19 @@ class Network(object):
     """This class encapsulates a network simulation.
 
     If network is None, then a GUI for drawing a network appears.  The
-    adjacency list should be formatted as [\"src,dest\", capacity, delay,
-    buffer size], where src & dest are formatted as a string with a
+    adjacency list should be formatted as [((src, dest), (capacity, buffer
+    size, delay))], where src & dest are formatted as a string with a
     leading \"h\" or \"r\", specifying a host or router, followed by an
-    integer id.  Flows should be given as [\"src,dest\", window, timeout,
-    data], where src & dest are formatted as previously, but only host
-    tags are allowed.
+    integer id.  Flows should be given as [((src, dest), (data, window,
+    timeout))], where src & dest are formatted as previously, but only host
+    tags are allowed.  All parameters should be specified in bits or bps.
 
-    :param network: tuple of adjacency list of links, flows
-    :type network: ([str, int, int, int], [str, int, int, int])
+    :param adjacent: adjacency lists of links & flows defining a network
+    :type adjacent`: ([(str, str), (int, int, int)], 
+                    [(str, str), (int, int, int)])
     """
 
-    def __init__(self, network=None):
+    def __init__(self, adjacent=None):
         # Simulation environment
         self._env = simpy.Environment()
         # Table of hosts in this network
@@ -42,13 +43,11 @@ class Network(object):
         self._flows = list()
 
         # If no parameters were specified
-        if network is None:
+        if adjacent is None:
             # Get edges & flows from GUI input
-            edges, flows = gui.draw()
-        else:
-            edges, flows = network
+            adjacent = gui.draw()
         # Populate the network
-        self._build_network(edges, flows)
+        self._build_network(*adjacent)
 
     def _build_network(self, edges, flows):
         """Build a network of SimPy processes."""
@@ -56,9 +55,6 @@ class Network(object):
         hosts = set()
         # Set of router addresses
         routers = set()
-        # Do some preprocessing on the given adjacency list & flows
-        edges = [(l[0].split(','), l[1:]) for l in edges]
-        flows = [(f[0].split(','), f[1:]) for f in flows]
 
         # Parse the inputted addresses from the adjacency list
         for endpoints, _ in edges:
@@ -123,14 +119,15 @@ class Network(object):
             # Create & persist the new flow
             self._flows.append(process.Flow(self._env, src, dest, *parameters))
 
-    def simulate(self, until=None):
+    def simulate(self, until_=None):
         """Run the initialized simulation.
 
-        :param int until: The time to run the simulation until
+        :param int until_: The time to run the simulation until
+        :return: None
         """
         # Initialize packet generating processes for each flow
         processes = [self._env.process(f.generate()) for f in self._flows]
         # Run the simulation
-        self._env.run()
+        self._env.run(until=until_)
         # Reset the environment
         self._env = simpy.Environment()
