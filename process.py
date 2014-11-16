@@ -205,6 +205,12 @@ class Flow(object):
             self._wait_for_ack.succeed()
             self._wait_for_ack = self._env.event()
 
+    def _tcp_reno(self):
+        self._window += 8192
+        logger.info("flow {}, {} window size increases to {} at time"
+                    " {}".format(self._host.addr,self._id, self._window, 
+                                 self._env.now))        
+
 
 class Host(object):
     """SimPy process representing a host.
@@ -277,11 +283,11 @@ class Host(object):
         """
         logger.info("host {} received packet {}, {} at time {}".format(
             self.addr, packet.flow, packet.id, self.res._env.now))
-
         # Queue new packet for transmission, and dequeue a packet. The
         # HostResource.receive event returns an outbound ACK if the
         # dequeued packet was an inbound data packet
         packet = yield self.res.receive(packet)
+
         # Transmit the dequeued packet
         yield self.res._env.process(self.transmit(packet))
 
@@ -297,14 +303,17 @@ class Host(object):
         :type packet: :class:`resources.Packet`
         :return: None
         """
+
         if packet.dest != self._addr:
             logger.info("host {} transmitting packet {}, {}, {} at time"
                         " {}".format(self.addr, packet.src, packet.flow, 
                                      packet.id, self.res._env.now))
-
             # Transmit an outbound packet
             yield self.res._env.process(self._transport(packet))
         else:
+            logger.info("host {} transmitting ACK {}, {}, {} at time"
+                        " {}".format(self.addr, packet.src, packet.flow,
+                                     packet.id, self.res._env.now))
             # Send an inbound ACK to its destination flow
             yield self.res._env.process(
                 self._flows[packet.flow].acknowledge(packet))
@@ -426,7 +435,6 @@ class Link(object):
                 self._endpoints[direction].receive(p), self._delay)
             self.res.update_traffic(direction, -p.size)
 
-
 class Router(object):
     """Simpy process representing a router.
 
@@ -504,19 +512,7 @@ class Router(object):
         :return: the transport handler selected by the routing policy
         :rtype: function
         """
-
+        
         # TODO: return a transport handler based on the given address
 
         pass
-
-    def transmit(self, packet):
-        """Transmit an outbound packet.
-
-        :param packet: the outbound packet
-        :type packet: :class:`resources.Packet`
-        :return: None
-        """
-        # Determine which transport handler to pass this packet to
-        transport = self._route(packet.addr)
-        # Send the packet
-        yield self.res._env.process(transport(packet))
