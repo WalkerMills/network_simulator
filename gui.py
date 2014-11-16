@@ -162,7 +162,7 @@ class InputDialog(Dialog):
 
     def _get_entry(self, i):
         """Get the (integer) value of the ith entry field."""
-        return int(getattr(self, "e{}".format(i)).get())
+        return int(getattr(self, "f{}".format(i)).get())
 
     def body(self, master):
         """Create a labeled entry box for each label.
@@ -173,7 +173,7 @@ class InputDialog(Dialog):
         :return: the entry field with initial focus, or None
         :rtype: tkinter.Widget
         """
-        for i, lalbel in enumerate(self.labels):
+        for i, label in enumerate(self.labels):
             # Make a label in the label box for this field
             tkinter.Label(master, text=label + ":").grid(row=i)
             # Make an entry field for this attribute
