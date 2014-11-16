@@ -1,19 +1,42 @@
+"""
+.. module:: resources
+    :platform: Unix
+    :synopsis: This module defines network components as SimPy resources
+"""
+
 import logging
 import queue
 import simpy
 import simpy.util
 
+from collections import deque
+
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+
+DOWN = 0
+"""Download direction."""
+
+UP = 1
+"""Upload diretion."""
 
 
 class Packet(object):
-    """This class represents a packet in our simulation."""
+    """This class represents a packet in our simulation.
+
+    :param src: source host
+    :type src: :class:`process.Host`
+    :param int dest: destination address
+    :param int fid: source flow id
+    :param int pid: packet id
+    :param object payload: packet payload
+    """
 
     # Simulated packet size (bits)
     size = 8192
+    """Packet size (bits)."""
 
-    def __init__(self, src, dest, fid, pid, payload):
+    def __init__(self, src, dest, fid, pid, payload=None):
         # Packet source address
         self._src = src
         # Packet destination address
@@ -27,38 +50,71 @@ class Packet(object):
 
     @property
     def src(self):
-        """Return the packet's source address."""
+        """Return the packet's source address.
+
+        :return: source address
+        :rtype: int
+        """
         return self._src
 
     @property
     def dest(self):
-        """Return the packet's destination address."""
+        """Return the packet's destination address.
+
+        :return: destination address
+        :rtype: int
+        """
         return self._dest
 
     @property
     def flow(self):
-        """Return the ID of the sender (flow) on the source host."""
+        """Return the ID of the sender (flow) on the source host.
+
+        :return: flow ID on localhost
+        :rtype: int
+        """
         return self._flow
 
     @property
     def id(self):
-        """Return the ID of this packet."""
+        """Return the ID of this packet.
+
+        :return: packet ID for the source flow
+        :rtype: int
+        """
         return self._id
 
     @property
     def data(self):
-        """Return this packet's payload of data."""
+        """Return this packet's payload of data.
+
+        :return: the payload of this packet
+        :rtype: object
+        """
         return self._data
 
     def acknowledgement(self):
+        """Generate an acknowledgement for this packet.
+
+        :return: an acknowledgement packet matching this packet
+        :rtype: :class:`ACK`
+        """
         return ACK(self._dest, self._src, self._flow, self._id)
 
 
 class ACK(Packet):
-    """This class represents an acknowledgement packet."""
+    """This class represents an acknowledgement packet.
+
+    :param src: source host
+    :type src: :class:`process.Host`
+    :param int dest: destination address
+    :param int fid: source flow id
+    :param int pid: packet id
+    """
 
     # Simulated acknowledgement packet size (bits)
     size = 512
+    """Packet size (bits)."""
 
     def __init__(self, src, dest, fid, pid):
         # Packet source address
@@ -73,13 +129,229 @@ class ACK(Packet):
         self._data = None
 
 
+class LinkTransport(simpy.events.Event):
+    """SimPy event representing directional packet transmission.
+
+    This event represents the transmission of a packet arcoss a
+    full-duplex link in the given direction.  It uses a limited size,
+    drop-tail buffer to queue packets for transmission.
+
+    :param link: the link that this transport event binds to
+    :type link: :class:`LinkResource`
+    :param bool direction: the (binary) direction of this transport event
+    :param packet: the packet to transport
+    :type packet: :class:`Packet`
+    """
+
+    def __init__(self, link, direction, packet):
+        # Initialize event
+        super(LinkTransport, self).__init__(link._env)
+        self._link = link
+        self._direction = direction
+        self._packet = packet
+        # logger.info("transport event triggered for packet {}, {}, {} at "
+        #             "time {}".format(self._packet.src, self._packet.flow,
+        #                              self._packet.id, self._link._env.now))
+
+        # Enqueue the packet for transmission, if the buffer isn't full
+        if self._link._fill[direction] + self._packet.size <= self._link.size:
+            # Increment buffer fill
+            self._link._fill[direction] += self._packet.size
+            # Enqueue self._packet
+            self._link._queues[direction].append(self)
+            # Flush as much of the buffer as possible through the self._link
+            self._link.flush(direction)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exception, value, traceback):
+        pass
+
+    def cancel(self, exception, value, traceback):
+        logger.info("{}\t{}".format(exception, value))
+        self.__exit__()
+
+    @property
+    def direction(self):
+        """Link direction for this transmission event.
+
+        :return: link direction
+        :rtype: int
+        """
+        return self._direction
+
+    @property
+    def packet(self):
+        """The packet to be transmitted.
+
+        :return: the packet in transit
+        :rtype: :class:`Packet`
+        """
+        return self._packet
+
+
+class LinkResource(object):
+    """SimPy resource representing a link.
+
+    This class is a full-duplex link implemented as a resource.  Packet
+    transmission is parametrized by direction, and each link has two
+    allowed directions (0 or 1), each of which has a dedicated buffer.
+    New packets are added to the appropriate buffer, and trigger a buffer
+    flush, which sends as much data from the buffer as possible through
+    the link in the specified direction.
+
+    :param simpy.Environment env: the simulation environment
+    :param int size: link buffer size, in bits
+    """
+
+    def __init__(self, env, capacity, size):
+        self._env = env
+        # Link capacity (bps)
+        self._capacity = capacity
+        # Buffer size (bits)
+        self._size = size
+        # Buffer fill (bits)
+        self._fill = [0, 0]
+        # Static link cost
+        self._static_cost = None
+        # Link traffic (bps)
+        self._traffic = [0, 0]
+
+        # Buffers for each edge direction
+        self._queues = (deque(), deque())
+        # Bind any classes into methods now
+        simpy.core.BoundClass.bind_early(self)
+
+    transport = simpy.core.BoundClass(LinkTransport)
+    """Transport packets across the link in a given direction."""
+
+    @property
+    def capacity(self):
+        """The maximum bitrate of the link in bps."""
+        return self._capacity
+
+    @property
+    def size(self):
+        """Maximum buffer capacity in bits.
+
+        :return: buffer size (bits)
+        :rtype: int
+        """
+        return self._size
+
+    @property
+    def static_cost(self):
+        """The static cost of this link.
+
+        Statc cost is calculated as link delay divided by link capacity.
+        """
+        # If static cost is unintialized
+        if self._static_cost is None:
+            try:
+                # Set static cost equal to delay / capacity
+                self._static_cost = self._delay / self._capacity 
+            # If capacity is 0 bps, make the cost infinite
+            except ZeroDivisionError:
+                self._static_cost = float("inf")
+        # Return static cost
+        return self._static_cost
+
+    def traffic(self, direction):
+        """The traffic across the link in the given direction.
+
+        :param int direction: link direction
+        :return: directional traffic (bps)
+        :rtype: int
+        """
+        return self._traffic[direction]
+
+    def update_traffic(self, direction, delta):
+        """Update the link traffic in a given direction.
+
+        Negative delta is equivalent to decreasing traffic.
+
+        :param int direction: link direction
+        :param int delta: change in directional traffic (bps)
+        :return: None
+        """
+        # Check for valid value
+        if delta < 0 and self._traffic[direction] < abs(delta):
+            raise ValueError("not enough traffic")
+        # Update traffic
+        self._traffic[direction] += delta
+
+    def fill(self, direction):
+        """Returns the proportion of the buffer which is filled.
+
+        :return: buffer fill as a proportion of buffer size
+        :rtype: float
+        """
+        return self._fill[direction] / self._size
+
+    def dynamic_cost(self, direction):
+        """Calculate the dynamic cost of a direction on this link.
+
+        Dynamic cost is directly proportional to link traffic and buffer
+        fill.
+
+        :param int direction: link direction to compute dynamic cost for
+        :return: link traffic multiplied by buffer fill proportion
+        :rtype: float
+        """
+        return self.traffic(direction) * self.res.fill(direction)
+
+    def cost(self, direction):
+        """Return the total cost of a direction on this link.
+
+        Total cost is simply calculated as static cost + dynamic cost.
+
+        :param int direction: link direction to compute cost for
+        """
+        return self._static_cost + self.dynamic_cost(direction)
+
+    def flush(self, direction):
+        """Send as many packets as possible from the buffer.
+
+        :param int direction: link direction to flush
+        :return: the packets popped from the buffer
+        :rtype: [:class:`Packet`]
+        """
+        # Initialize packet list
+        flushed = list()
+        event = None
+
+        while len(self._queues[direction]) > 0:
+            # Dequeue a packet
+            event = self._queues[direction].popleft()
+            # If the link isn't busy, flush another packet
+            if event.packet.size + self.traffic(direction) <= self._capacity:
+                flushed.append(event.packet)
+                # Update buffer fill
+                self._fill[direction] -= event.packet.size
+            else:
+                # Requeue the packet
+                self._queues[direction].appendleft(event)
+                print(event)
+                print(event.processed)
+                break
+
+        if flushed:
+            event.succeed(flushed)
+
+
 class ReceivePacket(simpy.events.Event):
-    """Simulator event representing packet arrival.
+    """SimPy event representing packet arrival.
 
     This event takes a resource as a parameter, and represents the 
     arrival of a packet at that resource.  It also triggers a packet
     transmission for each packet received.  This event may also be used
     as a context manager.
+
+    :param resource: the packet's destination queue (resource)
+    :type resource: :class:`PacketQueue`
+    :param packet: a packet to receive
+    :type packet: :class:`Packet`
     """
 
     def __init__(self, resource, packet):
@@ -103,43 +375,68 @@ class ReceivePacket(simpy.events.Event):
     cancel = __exit__
 
 
-class HostResource(object):
-    """Resource representing a host.
-    
-    This is a host implemented as a unidirectional resource.  It receives
-    packets, but does not accept packet transmission requests.  Whenever
-    a packet is received, this resource returns a packet to be sent.  If
-    an inbound data packet is received, an acknowledgement is generated
-    and sent, and the data packet itself is discarded (data packets don't
-    have a destination flow)
+class PacketQueue(object):
+    """SimPy resource for queuing packets.
 
+    This class is a FIFO SimPy resource. It receives packets, but does not
+    accept packet transmission requests.  Every packet arrival triggers
+    a packet transmission, at which time the next packet in the queue is
+    popped and returned.
+
+    :param simpy.Environment env: the simulation environment
+    :param int addr: the address of this resource
     """
 
     def __init__(self, env, addr):
         self._env = env
-        # host address
+        # Router address
         self._addr = addr
-        # Queue to hold inbound packets to transmit
+        # Queue of packet events to process
         self._packets = list()
 
+        # Bind event constructors as methods
         simpy.core.BoundClass.bind_early(self)
 
     receive = simpy.core.BoundClass(ReceivePacket)
+    """Receive a packet."""
 
     @property
     def addr(self):
-        """The address of this host."""
+        """The address of this resource.
+
+        :return: resource address
+        :rtype: int
+        """
         return self._addr
 
     def _receive(self):
-        """Receive a packet, and return a packet to be sent."""
+        """Receive a packet, yield, and return a packet to be sent."""
+        event = self._packets.pop(0)
+        event.succeed(event.packet)
+
+
+class HostResource(PacketQueue):
+    """SimPy resource representing a host.
+    
+    This is a FIFO resource which handles packets for a host.  If an
+    inbound data packet is received, an acknowledgement is generated and
+    sent, and the data packet itself is discarded (data packets don't
+    have a destination flow).  Otherwise, packets emitted by local flows
+    are transmitted into the network.
+
+    :param simpy.Environment env: the simulation environment
+    :param int addr: the address of this host
+    """
+
+    def _receive(self):
+        """Receive a packet, yield, and return an outbound packet."""
         event = self._packets.pop(0)
 
         # If a data packet has reached its destination
         if event.packet.dest == self.addr and event.packet.size == Packet.size:
-            logger.info("host {} triggering acknowledgement for packet {} "
-                        "at time {}".format(self._addr, event.packet.id, 
-                                            self._env.now))
+            logger.info("host {} triggering acknowledgement for packet {}, {}"
+                        " at time {}".format(self._addr, event.packet.flow,
+                                             event.packet.id, self._env.now))
             
             # Send back an ackonwledgement packet
             event.succeed(event.packet.acknowledgement())
@@ -148,159 +445,23 @@ class HostResource(object):
             event.succeed(event.packet)
 
 
-class RouterResource(object):
-    """Resource representing a router.
+class RouterResource(PacketQueue):
+    """SimPy resource representing a router.
 
-    This class is a router implemented as a unidirectional resource.
-    It receives packets, but does not accept packet transmission 
-    requests.  Every packet arrival triggers a packet transmission, at
-    which time the next packet in the queue is popped, routed, and sent
-    through the appropriate link.
+    This is a FIFO resource which handles packets for a router. When a
+    routing packet is received, it triggers outbound routing packet
+    transmission, and possibly a routing table update.  All outbound data
+    or routing packets are added to a sigle, infinite capacity queue, to
+    be popped and sent along the appropriate transport handler. 
+
+    :param simpy.Environment env: the simulation environment
+    :param int addr: the address of this router
     """
 
-    def __init__(self, env, dynamic=False):
-        self._env = env
-        self._dynamic = dynamic
-        # Queue of packet events to process
-        self._packets = list()
-        # List of outbound links of the form (link cost, link)
-        self._links = list()
-        # Dictionary mapping outbound links to destination ranges
-        self._table = dict()
+    def _receive(self):
+        """Receive a packet, yield, and return an outbound packet."""
 
-        # Bind event constructors as methods
-        simpy.core.BoundClass.bind_early(self)
+        # TODO: handle routing packets
 
-    receive = simpy.core.BoundClass(ReceivePacket)
-
-    @property
-    def dynamic(self):
-        """Flag which indicates static or dynamic routing."""
-        return self._dynamic
-
-    @dynamic.setter
-    def dynamic(self, d):
-        if d not in [True, False]:
-            raise ValueError("Invalid dynamic flag value.")
-
-        self._dynamic = d
-
-    @property
-    def links(self):
-        """A list of tuples of the form (static cost, link)."""
-        return self._links
-
-    @links.setter
-    def links(self, link):
-        self._links.append((link.static_cost(), link))
-        # TODO: add endpoints reachable through the link to self._table
-        self._table[link] = [None]
-
-    def disconnect(self, index):
-        """Disconnect a link from this router, if it exists."""
-        # Remove routing information for this link, if extant
-        self._table.pop(self._links[index])
-        # Remove the link
-        self._links.remove(self._links[index])
-
-    def _transmit(self, packet):
-        """Transmit an outbound packet."""
-        # TODO: route packet & transmit it through a link
-        pass
-
-    def _trigger_transmit(self):
-        """Trigger outbound packet transmission."""
         event = self._packets.pop(0)
-        self._transmit(event.packet)
-        event.succeed()
-
-
-class LinkTransport(simpy.events.Event):
-    """Simulator event representing directional packet transmission.
-
-    This event takes a resource as a parameter, and represents the
-    transmission of a packet arcoss a full-duplex link, through the
-    use of a limited size buffer.  Buffer overflows are dropped.
-    """
-
-    def __init__(self, link, direction, packet):
-        # Initialize event
-        super(LinkTransport, self).__init__(link._env)
-        self._link = link
-        self._direction = direction
-        self._packet = packet
-
-        # Enqueue the packet for transmission, if the buffer isn't full
-        if link._fill[direction] + packet.size <= link.size:
-            # Increment buffer fill
-            link._fill[direction] += packet.size
-            # Enqueue packet
-            link._packet_queues[direction].put_nowait(self)
-            # Transport a packet through the link
-            link._receive(direction)
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exception, value, traceback):
-        # If the event was interrupted,
-        # if not self.triggered:
-        #     handle error
-        pass
-
-    @property
-    def direction(self):
-        """Link direction"""
-        return self._direction
-
-    @property
-    def packet(self):
-        """The packet to be transmitted"""
-        return self._packet
-
-
-class LinkResource(object):
-    """Rousource representing a link.
-
-    This class is a full-duplex link implemented as a resource.  Packet
-    transmission is parametrized by direction, and each link has two
-    allowed directions (0 or 1)
-    """
-
-    def __init__(self, env, buf_size):
-        self._env = env
-
-        # Check buffer size for valid value
-        if buf_size <= 0:
-            raise ValueError("buffer size must be > 0")
-
-        # Buffer size (bits)
-        self._size = buf_size
-        # Buffer fill (bits)
-        self._fill = [0, 0]
-
-        # Buffers for each edge direction
-        self._packet_queues = (queue.Queue(), queue.Queue())
-        # Bind any classes into methods now
-        simpy.core.BoundClass.bind_early(self)
-
-    transport = simpy.core.BoundClass(LinkTransport)
-    """Transport packets across the link in a given direction."""
-
-    @property
-    def size(self):
-        """Maximum buffer capacity in bits."""
-        return self._size
-
-    def fill(self, direction):
-        """Returns the proportion of the buffer which is filled."""
-        return self._fill[direction] / self.buffer
-
-    def _receive(self, direction):
-        """Dequeue a packet and send it."""
-        # Dequeue a packet
-        event = self._packet_queues[direction].get_nowait()
-        # Update buffer fill
-        self._fill[direction] -= event.packet.size
-        # Return dequeued packet
         event.succeed(event.packet)

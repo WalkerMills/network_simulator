@@ -1,3 +1,9 @@
+"""
+.. module:: process
+    :platform: Unix
+    :synopsis: This module defines network actors as processes
+"""
+
 import logging
 import math
 import queue
@@ -6,211 +12,8 @@ import simpy
 
 import resources
 
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
-
-class Host(object):
-    """SimPy process representing a host.
-
-    Each host process has an underlying HostResource which handles
-    (de)queuing packets.  This process handles interactions between the
-    host resource, any active flows, and up to one outbound link.
-    """
-
-    def __init__(self, env, addr):
-        self.res = resources.HostResource(env, addr)
-        # Host address
-        self._addr = addr
-        # Active flows
-        self._flows = list()
-        # Outbound link
-        self._transport = None
-
-    @property
-    def addr(self):
-        """The address of this host."""
-        return self._addr
-
-    @property
-    def flows(self):
-        """A list of flows active on this host."""
-        return self._flows
-
-    def connect(self, transport):
-        """Connect a new (link) transport handler to this host."""
-        self._transport = transport
-
-    def disconnect(self, transport):
-        """Disconnect an existing transport handler.
-
-        If the given transport handler is not connected to this host,
-        do nothing.
-        """
-        if transport == self._transport:
-            self._transport = None
-
-    def register(self, flow):
-        """Register a new flow on this host, and return the flow ID."""
-        self._flows.append(flow)
-        return len(self._flows) - 1
-
-    def receive(self, packet):
-        """Receive a packet.
-
-        Packets may be inbound or outbound, data or acknowledgement
-        packets.  Inbound data packets automatically generate an
-        outbound acknowledgement.
-        """
-        logger.info("host {} received packet {} at time {}".format(
-            self.addr, packet.id, self.res._env.now))
-
-        # Queue new packet for transmission, and dequeue a packet. The
-        # HostResource.receive event returns an outbound ACK if the
-        # dequeued packet was an inbound data packet
-        packet = yield self.res.receive(packet)
-        # Transmit the dequeued packet
-        yield self.res._env.process(self._transmit(packet))
-
-    def _transmit(self, packet):
-        """Transmit a packet.
-
-        Inbound data packets are replaced by an acknowledgement packet
-        when they exit the host's internal queue, so there are only two
-        cases: packets may be outbound, or they are ACK's destined for
-        a flow on this host.
-        """
-        if packet.dest != self._addr:
-            logger.info("host {} transmitting packet {} at time {}".format(
-                self.addr, packet.id, self.res._env.now))
-
-            # Transmit an outbound packet
-            yield self.res._env.process(self._transport(packet))
-        else:
-            logger.info("host {} transmitting ACK {} at time {}".format(
-                self.addr, packet.id, self.res._env.now))
-
-            # Send an inbound ACK to its destination flow
-            yield self.res._env.process(
-                self._flows[packet.flow].acknowledge(packet))
-
-
-class Link(object):
-    """SimPy process representing a link.
-
-    Each link process has an underlying LinkResource which handles
-    (de)queuing packets.  This process handles interactions between the
-    link resource, and the processes it may connect.
-    """
-
-    def __init__(self, env, capacity, delay, buf_size):
-        self.res = resources.LinkResource(env, buf_size)
-        # Link rate (bps)
-        self._capacity = capacity
-        # Link traffic (bps)
-        self._traffic = [0, 0]
-        # Link delay
-        self._delay = delay
-
-        # Endpoints for each direction
-        self._endpoints = [None, None]
-        # 'Upload' handler
-        self._up = lambda p: self.receive(1, p)
-        # 'Download' handler
-        self._down = lambda p: self.receive(0, p)
-
-    @property
-    def capacity(self):
-        """The maximum bitrate of the link in Bps."""
-        return self._capacity
-
-    @property
-    def delay(self):
-        """The link delay in seconds."""
-        return self._delay
-
-    @property
-    def endpoints(self):
-        """A list of connected endpoints (up to 1 per direction)"""
-        return self._endpoints
-
-    def connect(self, proc0, proc1):
-        """Connect two network components via this link."""
-        self._endpoints = [proc0, proc1]
-        self._endpoints[0].connect(self._up)
-        self._endpoints[1].connect(self._down)
-
-    def disconnect(self):
-        """Disconnect a link from its two endpoints."""
-        self._endpoints[0].disconnect(self._up)
-        self._endpoints[1].disconnect(self._down)
-        self._endpoints = [None, None]
-
-    def static_cost(self):
-        """Calculate the static cost of this link.
-
-        Cost is inversely proportional to link capacity, and  directly
-        proportional to delay.
-
-        """
-        try:
-            return self._delay / self._capacity 
-        # If capacity is 0 bps, return infinite cost
-        except ZeroDivisionError:
-            return float("inf")
-
-    def dynamic_cost(self, direction):
-        """Calculate the dynamic cost of a direction on this link.
-
-        Dynamic cost is directly proportional to link traffic and buffer
-        fill.
-        """
-        return self._traffic[direction] * self.res.fill(direction)
-
-    def cost(self, direction):
-        """Return the total cost of a direction on this link.
-
-        Total cost is simply calculated as static cost + dynamic cost
-        """
-        return self.static_cost() + self.dynamic_cost(direction)
-
-    def receive(self, direction, packet):
-        """Receive a packet to transmit in a given direction.
-
-        New packets are appended to one of the link's internal directional
-        buffer, and trigger the dequeuing of a packet from that buffer.
-        The dequeued packet is then sent across the link.  All link
-        buffers are drop-tail.
-        """
-        logger.info("link received packet at time {}".format(
-            self.res._env.now))
-
-        # Queue the new packet for transmission, and dequeue a packet
-        packet = yield self.res.transport(direction, packet)
-        # Transmit the dequeued packet
-        yield self.res._env.process(self._transmit(direction, packet))
-
-    def _transmit(self, direction, packet):
-        """Transmit a packet across the link in a given direction.
-
-        If the link isn't already at capacity, this generator triggers
-        a transmission event after a its link delay is elapsed, as if
-        sending a packet across a physical link with a propagation
-        delay.
-        """
-        # If the link isn't busy
-        if packet.size + self._traffic[direction] <= self._capacity:
-            logger.info("link transmitting packet at time {}".format(
-                self.res._env.now))
-        
-            # Increment directional traffic
-            self._traffic[direction] += packet.size
-            # Transmit packet after waiting, as if sending the packet
-            # across a physical link
-            yield simpy.util.start_delayed(self.res._env,
-                self._endpoints[direction].receive(packet), self._delay)
-            # Decrement directional traffic
-            self._traffic[direction] -= packet.size
 
 
 class Flow(object):
@@ -219,21 +22,31 @@ class Flow(object):
     Each flow process is connected to a source host, and generates as
     many packets as are necessary to send all of its data.  If data is
     None, a random, 8-bit number of packets are sent.
+
+    :param simpy.Environment env: the simulation environment
+    :param host: the source host of this flow
+    :type host: :class:`Host`
+    :param int dest: the address of the destination host
+    :param int data: the total amount of data to transmit (bits)
+    :param int window: the transmission window size (bits)
+    :param int timeout: the (simulation) time to wait for :class:`ACK`'s 
     """
 
-    def __init__(self, env, host, dest, window, timeout, data):
+    def __init__(self, env, host, dest, data, window, timeout, delay):
         self._env = env
         # Flow host
         self._host = host
         # FLow destination
         self._dest = dest
-        # Window size for this flow
-        self._window = window
-        # Time (in simulation time) to wait for an acknowledgement before
-        # retransmitting a packet
-        self._time = timeout
         # Amount of data to transmit (bits)
         self._data = data
+        # Window size for this flow
+        self._window = window
+        # Time (simulation time) to wait for an acknowledgement before
+        # retransmitting a packet
+        self._time = timeout
+        # Time (simulation time) to wait before initial transmission
+        self._delay = delay
 
         # Register this flow with its host, and get its ID
         self._id = self._host.register(self)
@@ -243,49 +56,55 @@ class Flow(object):
         self._outbound = dict()
         # Number of packets generated so far
         self._sent = 0
+        # Initialize per-window sent data counter
+        self._window_sent = 0
         # Wait to receive acknowledgement (passivation event)
         self._wait_for_ack = self._env.event()
 
     @property
     def dest(self):
-        """The destination address for this flow."""
+        """The destination address for this flow.
+
+        :return: destination address
+        :rtype: int
+        """
         return self._dest
 
-    @dest.setter
-    def dest(self, dest):
-        self._dest = dest
+    @property
+    def data(self):
+        """The total amount of data to transfer.
+
+        :return: data size (bits)
+        :rtype: int
+        """
+        return self._data
 
     @property
     def id(self):
-        """The ID of this flow, assigned by its host."""
+        """The ID of this flow, assigned by its host.
+
+        :return: flow id, relative to localhost
+        :rtype: int
+        """
         return self._id
 
     @property
     def timeout(self):
         """The time after which packets are considered dropped.
 
-        Once the first ACK in from the previous window is received, any
-        packet which is unacknowedged after <timeout> units of simulation
-        time is considered dropped, and may be resent.
+        :return: acknowledgement timeout (simulation time)
+        :rtype: int
         """
         return self._time
 
-    @timeout.setter
-    def timeout(self, timeout):
-        if time < 0:
-            raise ValueError("timeout must be >= 0")
-        self._time = timeout
-
     @property
     def window(self):
-        """Transmission window size, in packets"""
-        return self._window
+        """Transmission window size, in bits.
 
-    @window.setter
-    def window(self, window):
-        if window < 1:
-            raise ValueError("window size must be >= 1")
-        self._window = window
+        :return: window size (bits)
+        :rtype: int
+        """
+        return self._window
 
     def _generator(self):
         """Create a packet generator.
@@ -293,7 +112,6 @@ class Flow(object):
         If a data size is given, return a generator which yields
         ceil(data size / packet size) packets.  If data size is None,
         it yields a random, 8-bit number of packets.
-
         """
         n = 0
         if self._data == None:
@@ -304,7 +122,7 @@ class Flow(object):
             n = math.ceil(self._data / resources.Packet.size)
 
         # Create packet generator
-        g = (resources.Packet(self._host.addr, self._dest, self._id, i, 1)
+        g = (resources.Packet(self._host.addr, self._dest, self._id, i)
              for i in range(n))
 
         return g
@@ -312,40 +130,46 @@ class Flow(object):
     def generate(self):
         """Generate and transmit outbound data packets.
 
-        This generator gets up to <window size> packets from the internal
-        packet generator, and transmits each of them.  The process then
+        This process has an underlying generator which yields the number
+        of packets required to transmit all the data.  The process then
         passivates until the acknowledgement of those packets reactivates
-        it.  Once all packets have been generated, and acknowledgements
-        received for the packets in the last window, any remaining
-        unacknowedged packets are transmitted one last time.
+        it.
+
+        :return: None
         """
+        # Yield initial delay
+        yield self._env.timeout(self._delay)
+
+        # Send all the packets
         while True:
             try:
                 # Send as many packets as fit in our window
-                for i in range(self._window):
-                    # Generate the next packet to send
-                    packet = next(self._packets)
+                while self._window_sent < self._window:
                     logger.info(
                         "flow {}, {} sending packet {} at time {}".format(
                             self._id, self._host.addr, self._sent, 
                             self._env.now))
-
+                    # Generate the next packet to send
+                    packet = next(self._packets)
                     # Increment the count of generated packets
                     self._sent += 1
+                    # Increment the counter for data sent in this window
+                    self._window_sent += packet.size
                     # Add the packet to the map of unacknowedged packets
                     self._outbound[packet.id] = packet
                     # Send the packet through the connected host
                     yield self._env.process(self._host.receive(packet))
                 # Passivate packet generation
                 yield self._wait_for_ack
+                # On reactivation, reset data counter for new window
+                self._window_sent = 0
             except StopIteration:
-                # Stop trying to send packets once we run out (last window
-                # is exhausted)
+                # Stop trying to send packets once we run out
                 break
         # Wait for the packets in the last window
         yield self._wait_for_ack
-        # Retransmit any remaining unacknowedged packets
-        yield self._env.process(self._flush())
+        logger.info("flow {}, {} finished transmitting".format(self._host.addr,
+                                                               self._id))
 
     def acknowledge(self, ack):
         """Receive an acknowledgement packet.
@@ -358,6 +182,10 @@ class Flow(object):
         is received from a retransmitted packet (i.e., outside the
         previous window), it is marked as acknowledged, but does not
         trigger a timeout or packet generation.
+
+        :param ack: acknowledgement packet
+        :type ack: :class:`resources.ACK`
+        :return: None
         """
         logger.info("flow {}, {} acknowledges packet {} at time {}".format(
             self._id, self._host.addr, ack.id, self._env.now))
@@ -369,33 +197,322 @@ class Flow(object):
         if ack.id >= self._sent - self._window:
             # Wait for other acknowledgements
             yield self._env.timeout(self._time)
-            # Determine which packets in this window have not been acknowledged
-            targets = filter(lambda i: i[0] >= self._sent - self._window, 
-                             self._outbound.items())
-            # Resend dropped packets
-            for _, packet in targets:
-                yield self._env.process(self._host.receive(packet))
 
-            # TODO: congestion control algorithm should (potentially) modify
-            #       self._window here
+            # TODO: congestion control algorithm should modify window
+            #       and detect/recover dropped packets
 
             # Continue sending more packets
             self._wait_for_ack.succeed()
             self._wait_for_ack = self._env.event()
 
-    def _flush(self):
-        """Flush the outbound packet list.
+    def _tcp_reno(self):
+        self._window += 8192
+        logger.info("flow {}, {} window size increases to {} at time"
+                    " {}".format(self._host.addr,self._id, self._window, 
+                                 self._env.now))        
 
-        Dropped packets (no ACK received) are retransmitted once, after
-        acknowledge waits for packets in their window.  If they are
-        dropped twice, the packet remains in the flow's container of
-        unacknowedged packets.  This method retransmits all twice-dropped
-        packets one more time, in an attempt to flush the unacknowedged
-        packet list.
+
+class Host(object):
+    """SimPy process representing a host.
+
+    Each host process has an underlying HostResource which handles
+    (de)queuing packets.  This process handles interactions between the
+    host resource, any active flows, and up to one outbound link.
+
+    :param simpy.Environment env: the simulation environment
+    :param int addr: the address of this host
+    """
+
+    def __init__(self, env, addr):
+        # Initialize host resource
+        self.res = resources.HostResource(env, addr)
+        # Host address
+        self._addr = addr
+        # Active flows
+        self._flows = list()
+        # Outbound link
+        self._transport = None
+
+    @property
+    def addr(self):
+        """The address of this host.
+
+        :return: host address
+        :rtype: int
         """
-        logger.info("flow {}, {} flushing unacknowedged at time {}".format(
-            self._id, self._host.addr, self._env.now))
+        return self._addr
+
+    @property
+    def flows(self):
+        """A list of flows active on this host.
+
+        :return: a list of flows
+        :rtype: [:class:`Flow`]
+        """
+        return self._flows
+
+    def connect(self, transport):
+        """Connect a new (link) transport handler to this host.
+
+        :param function transport: transport handler
+        :return: None
+        """
+        self._transport = transport
+
+    def disconnect(self, transport):
+        """Disconnect an existing transport handler.
+
+        If the given transport handler is not connected to this host,
+        do nothing.
+
+        :param function transport: the transport handler to disconnect
+        :return: None
+        """
+        if transport == self._transport:
+            self._transport = None
+
+    def receive(self, packet):
+        """Receive a packet.
+
+        Packets may be inbound or outbound, data or acknowledgement
+        packets.  Inbound data packets automatically generate an
+        outbound acknowledgement.
+
+        :param packet: the packet to process
+        :type packet: :class:`resources.Packet`
+        """
+        logger.info("host {} received packet {}, {} at time {}".format(
+            self.addr, packet.flow, packet.id, self.res._env.now))
+        # Queue new packet for transmission, and dequeue a packet. The
+        # HostResource.receive event returns an outbound ACK if the
+        # dequeued packet was an inbound data packet
+        packet = yield self.res.receive(packet)
+
+        # Transmit the dequeued packet
+        yield self.res._env.process(self.transmit(packet))
+
+    def transmit(self, packet):
+        """Transmit a packet.
+
+        Inbound data packets are replaced by an acknowledgement packet
+        when they exit the host's internal queue, so there are only two
+        cases: packets may be outbound, or they are ACK's destined for
+        a flow on this host.
+
+        :param packet: the outbound packet
+        :type packet: :class:`resources.Packet`
+        :return: None
+        """
+
+        if packet.dest != self._addr:
+            logger.info("host {} transmitting packet {}, {}, {} at time"
+                        " {}".format(self.addr, packet.src, packet.flow, 
+                                     packet.id, self.res._env.now))
+            # Transmit an outbound packet
+            yield self.res._env.process(self._transport(packet))
+        else:
+            logger.info("host {} transmitting ACK {}, {}, {} at time"
+                        " {}".format(self.addr, packet.src, packet.flow,
+                                     packet.id, self.res._env.now))
+            # Send an inbound ACK to its destination flow
+            yield self.res._env.process(
+                self._flows[packet.flow].acknowledge(packet))
+
+    def register(self, flow):
+        """Register a new flow on this host, and return the flow ID.
+
+        :param flow: a new flow to register with this host
+        :type flow: :class:`Flow`
+        :return: None
+        """
+        self._flows.append(flow)
+        return len(self._flows) - 1
+
+
+class Link(object):
+    """SimPy process representing a link.
+
+    Each link process has an underlying LinkResource which handles
+    (de)queuing packets.  This process handles interactions between the
+    link resource, and the processes it may connect.
+
+    :param simpy.Environment env: the simulation environment
+    :param int capacity: the link rate, in bits per second
+    :param int size: the link buffer size, in bits
+    :param int delay: the link delay in simulation time
+    """
+
+    def __init__(self, env, capacity, size, delay):
+        # Initialize link resource
+        self.res = resources.LinkResource(env, capacity, size)
+        # Link delay (simulation time)
+        self._delay = delay
+
+        # Endpoints for each direction
+        self._endpoints = [None, None]
+        # "Upload" handler
+        self._up = lambda p: self.receive(resources.UP, p)
+        # "Download" handler
+        self._down = lambda p: self.receive(resources.DOWN, p)
+
+    @property
+    def delay(self):
+        """The link delay in seconds."""
+        return self._delay
+
+    @property
+    def endpoints(self):
+        """A list of connected endpoints (up to 1 per direction)"""
+        return self._endpoints
+
+    def connect(self, A, B):
+        """Connect two network components via this link.
+
+        :param A: the first new endpoint of this link
+        :type A: :class:`Host`, or :class:`Router` 
+        :param B: the second new endpoint of this link
+        :type B: :class:`Host`, or :class:`Router` 
+        :return: None
+        """
+        # Store the endpoints
+        self._endpoints = [A, B]
+        # Connect the "upload" (0 -> 1) hander
+        self._endpoints[0].connect(self._up)
+        # Connect the "download" (1 -> 0) handler 
+        self._endpoints[1].connect(self._down)
+
+    def disconnect(self):
+        """Disconnect a link from its two endpoints.
+
+        :return: None
+        """
+        # Disconnect "upload" handler
+        self._endpoints[0].disconnect(self._up)
+        # Disconnect "download" handler
+        self._endpoints[1].disconnect(self._down)
+        # Reset the endpoints
+        self._endpoints = [None, None]
+
+    def receive(self, direction, packet):
+        """Receive a packet to transmit in a given direction.
+
+        New packets are appended to one of the link's internal directional
+        buffer, and trigger the dequeuing of a packet from that buffer.
+        The dequeued packet is then sent across the link.  All link
+        buffers are drop-tail.
+
+        :param int direction: the direction to transport the packet
+        :param packet: the packet to send through the link
+        :type packet: :class:`resources.Packet`
+        :return: None
+        """
+        logger.info("link received packet {}, {}, {} at time {}".format(
+            packet.src, packet.flow, packet.id, self.res._env.now))
+        # Queue the new packet for transmission, and dequeue a packet
+        packets = yield self.res.transport(direction, packet)
+        # Transmit the dequeued packets, if any
+        yield self.res._env.process(self.transmit(direction, packets))
+
+    def transmit(self, direction, packets):
+        """Transmit packets across the link in a given direction.
+
+        This generating function yields a transmission process for each
+        packet given
+
+        :param int direction: the direction to transport the packet
+        :param packet: a list of packets to transmit
+        :type packet: [:class:`resources.Packet`]
+        :return: None
+        """
+        # Transmit packet after waiting, as if sending the packet
+        # across a physical link
+        for p in packets:
+            logger.info("transmitting packet {}, {}, {} at time {}".format(
+                p.src, p.flow, p.id, self.res._env.now))
+            # Increment directional traffic
+            self.res.update_traffic(direction, p.size)
+            yield simpy.util.start_delayed(self.res._env,
+                self._endpoints[direction].receive(p), self._delay)
+            self.res.update_traffic(direction, -p.size)
+
+class Router(object):
+    """Simpy process representing a router.
+
+    Router objects each have an underlying PacketQueue resource which
+    receives all inbound packets.  When a new packet is received, it
+    triggers a packet transmission event.  The dequeued packet is routed
+    based on its destination, and data packets are sent to the appropriate
+    transport handler (link).
+
+    :param simpy.Environment env: the simulation environment
+    :param int addr: the address of this router
+    """
+
+    def __init__(self, env, addr):
+        # Initialize underlying PacketQueue
+        self.res = resources.PacketQueue(env, addr)
+        # Address of this router (router ID's are independent of host ID's)
+        self._addr = addr
+        # Set of outbound links
+        self._links = set()
+        # Dictionary mapping outbound links to destinations
+        self._table = dict()
+
+    @property
+    def addr(self):
+        """The address of this router.
+
+        :return: router address
+        :rtype: int
+        """
+        return self._addr
+
+    def connect(self, transport):
+        """Connect an outbound link.
+
+        :param function transport: transport handler
+        :return: None
+        """
+        # Connect a new transport handler to a new "port"
+        self._links.add(transport)
+
+    def disconnect(self, transport):
+        """Disconnect a link, if it exists.
+
+        :param function transport: the transport handler to disconnect
+        :return: None
+        """
+        # If the given transport handler is connected, remove it
+        self._links.discard(transport)
+        try:
+            # Delete this outbound link from the routing table
+            del self._table[transport]
+        except KeyError:
+            # If it doesn't exist, do nothing
+            pass
+
+    def receive(self, packet):
+        """Receive a packet, and yield a transmission event.
+
+        :param packet:
+        :type packet: :class:`resources.Packet`
+        :return: None
+        """
+        logger.info("router {} received packet {} at time {}".format(
+            self.addr, packet.id, self.res._env.now))
+        # Push another packet through the queue
+        packet = yield self.res.receive(packet)
+        # Transmit the dequeued packet
+        yield self.res._env.process(self.transmit(packet))
+
+    def _route(self, address):
+        """Return the correct transport handler for the given address.
+
+        :param int address: the destination address
+        :return: the transport handler selected by the routing policy
+        :rtype: function
+        """
         
-        # Retransmit any remaining unacknowedged packets
-        for packet in self._outbound.values():
-            yield self._env.process(self._host.receive(packet))
+        # TODO: return a transport handler based on the given address
+
+        pass
