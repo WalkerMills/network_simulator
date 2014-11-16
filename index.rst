@@ -8,3 +8,4 @@ CS143 Network Simulator
    doc/process
    doc/network
    doc/gui
+   doc/test
