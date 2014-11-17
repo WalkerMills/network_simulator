@@ -9,12 +9,12 @@ import math
 import queue
 import random
 import simpy
+import collections
 
 import resources
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
 
 class Flow(object):
     """SimPy process representing a flow.
@@ -47,7 +47,12 @@ class Flow(object):
         self._time = timeout
         # Time (simulation time) to wait before initial transmission
         self._delay = delay
-
+        # The flow is either is SS(0) or CA(1) states
+        self._state = 0
+        # The slowstart threshold. Set it to be a large number
+        self._ssthresh = 100000
+        # Queue to check for duplicate ACKs for packet loss
+        self._dupQueue = collections.deque(maxlen = 4)
         # Register this flow with its host, and get its ID
         self._id = self._host.register(self)
         # Initialize packet generator
@@ -193,24 +198,60 @@ class Flow(object):
         # Acknowledge the packet whose ACK was received
         del self._outbound[ack.id]
 
+        # For an acknowledgement received, react with tcp reno
+        self._tcp_reno(ack)
+
         # If this ACK is not from a re-transmitted packet
         if ack.id >= self._sent - self._window:
             # Wait for other acknowledgements
             yield self._env.timeout(self._time)
 
-            # TODO: congestion control algorithm should modify window
-            #       and detect/recover dropped packets
+            # TODO congestion control
 
             # Continue sending more packets
             self._wait_for_ack.succeed()
             self._wait_for_ack = self._env.event()
+    
+    def _tcp_reno(self, ack):
+        """ 
+        Use TCP reno as the congestion control for this flow
+        For every acknowledgement packet received, increase the window size
+        by 8192 (the size of a packet in bits) if we are in the slow start
+        state. If our window size is greater than the slow start threshold
+        enter the congestion avoidance state, where we increase the window
+        size by 1/(window size). 
+        :param ack: acknowledgement packet
+        :type ack: class: 'resources.ACK'
+        :return: None
+        """
 
-    def _tcp_reno(self):
-        self._window += 8192
-        logger.info("flow {}, {} window size increases to {} at time"
-                    " {}".format(self._host.addr,self._id, self._window, 
-                                 self._env.now))        
+        logger.info("tcp called")
+        
+        # if the flow is in slow start phase
+        if self._state == 0:
+            # increase window size exponentially
+            self._window += PACKETSIZE
+            # enter congestion avoidance if we have reached the ss threshold
+            if self._window >= self._ssthresh:
+                self._state = 1
+        # if the flow is in congestion avoidance phase
+        else:
+            # increase the window size linearly
+            self._window += PACKETSIZE/self._window
 
+        logger.info("flow {}, window size increases to {} at time {}".format(
+            self._id, self._window, self._env.now)) 
+
+        # Packet Loss Detection #1
+        # TODO: timeouts
+        # self._time
+
+        # Packet Loss Detection #2
+        # append the id of the new acknowledgement packet that we just received
+        self._dupQueue.append(ack.id)
+        # if all four in the queue are the same, reduce window size
+        if self._dupQueue.count(ack.id) == 4:
+            self._window /= 2
 
 class Host(object):
     """SimPy process representing a host.
