@@ -13,7 +13,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-class Dialog(tkinter.Toplevel, metaclass=abc.ABCMeta):
+class Dialog(tkinter.Toplevel, abc.ABC):
     """Abstract base class for constructing dialog boxes.
 
     This base class handles widget creation/destruction, and implements
@@ -150,7 +150,7 @@ class Dialog(tkinter.Toplevel, metaclass=abc.ABCMeta):
         pass
 
 
-class InputDialog(Dialog, metaclass=abc.ABCMeta):
+class InputDialog(Dialog):
     """Dialog for entering field data.
 
     :param parent: parent of this widget
@@ -194,7 +194,7 @@ class InputDialog(Dialog, metaclass=abc.ABCMeta):
         self.result = [self._get_entry(i) for i in range(len(self.labels))]
 
 
-class FlowDialog(InputDialog, metaclass=abc.ABCMeta):
+class FlowDialog(InputDialog):
     """Dialog for specifying flow parameters.
 
     :param parent: parent of this widget
@@ -215,7 +215,7 @@ class FlowDialog(InputDialog, metaclass=abc.ABCMeta):
                        range(len(self.labels))))
 
 
-class LinkDialog(InputDialog, metaclass=abc.ABCMeta):
+class LinkDialog(InputDialog):
     """Dialog for specifying link parameters.
 
     :param parent: parent of this widget
