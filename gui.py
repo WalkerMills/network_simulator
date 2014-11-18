@@ -4,7 +4,6 @@
     :synopsis: This module implements a GUI for drawing a network.
 """
 
-import abc
 import logging
 import operator
 import tkinter
@@ -13,7 +12,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-class Dialog(tkinter.Toplevel, abc.ABC):
+class Dialog(tkinter.Toplevel):
     """Abstract base class for constructing dialog boxes.
 
     This base class handles widget creation/destruction, and implements
@@ -67,9 +66,10 @@ class Dialog(tkinter.Toplevel, abc.ABC):
         # Enter local event loop
         self.wait_window(self)
 
-    @abc.abstractmethod
     def body(self, master):
         """Create dialog box body.
+
+        Should be overridden by subclasses.
 
         :param master: parent of this widget
         :type master: tkinter.Frame
@@ -132,7 +132,6 @@ class Dialog(tkinter.Toplevel, abc.ABC):
         # Destroy this widget
         self.destroy()
 
-    @abc.abstractmethod
     def validate(self):
         """Validate the data entered in the dialog box.
 
@@ -141,7 +140,6 @@ class Dialog(tkinter.Toplevel, abc.ABC):
         """
         pass
 
-    @abc.abstractmethod
     def apply(self):
         """Process the data entered in the dialog box.
 
