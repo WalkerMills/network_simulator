@@ -332,8 +332,6 @@ class LinkResource(object):
             else:
                 # Requeue the packet
                 self._queues[direction].appendleft(event)
-                print(event)
-                print(event.processed)
                 break
 
         if flushed:
