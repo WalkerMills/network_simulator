@@ -150,7 +150,7 @@ class Dialog(tkinter.Toplevel, metaclass=abc.ABCMeta):
         pass
 
 
-class InputDialog(Dialog):
+class InputDialog(Dialog, metaclass=abc.ABCMeta):
     """Dialog for entering field data.
 
     :param parent: parent of this widget
@@ -194,7 +194,7 @@ class InputDialog(Dialog):
         self.result = [self._get_entry(i) for i in range(len(self.labels))]
 
 
-class FlowDialog(InputDialog):
+class FlowDialog(InputDialog, metaclass=abc.ABCMeta):
     """Dialog for specifying flow parameters.
 
     :param parent: parent of this widget
@@ -215,7 +215,7 @@ class FlowDialog(InputDialog):
                        range(len(self.labels))))
 
 
-class LinkDialog(InputDialog):
+class LinkDialog(InputDialog, metaclass=abc.ABCMeta):
     """Dialog for specifying link parameters.
 
     :param parent: parent of this widget
