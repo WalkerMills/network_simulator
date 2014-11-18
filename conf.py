@@ -44,7 +44,7 @@ class Mock(MagicMock):
     def __getattr__(cls, name):
             return Mock()
 
-MOCK_MODULES = ['simpy', 'tkinter', '_tkinter']
+MOCK_MODULES = ['simpy', 'simpy.util', 'tkinter', '_tkinter']
 sys.modules.update((mod_name, Mock()) for mod_name in MOCK_MODULES)
 
 # The suffix of source filenames.
