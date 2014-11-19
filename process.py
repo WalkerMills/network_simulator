@@ -371,7 +371,7 @@ class Transport(object):
 
         :param packet: the packet to send
         :type packet: :class:`resources.Packet`
-        :return: :method:`Link.receive` generating method
+        :return: :func:`Link.receive` generating method
         :rtype: generator
         """
         return self._link.receive(self._direction, packet)
