@@ -84,6 +84,15 @@ class Packet(object):
         """
         return self._id
 
+    @id.setter
+    def set_id(self, value):
+        """Sets this packet's ID to a new value
+
+        :param function value: new value of the ID
+        :return: None
+        """
+        self._id = value
+
     @property
     def data(self):
         """Return this packet's payload of data.
@@ -95,10 +104,14 @@ class Packet(object):
 
     def acknowledgement(self):
         """Generate an acknowledgement for this packet.
+        Packets return an id based on the next packet id expected 
+        by the host.
 
         :return: an acknowledgement packet matching this packet
         :rtype: :class:`ACK`
         """
+
+
         return ACK(self._dest, self._src, self._flow, self._id)
 
 
@@ -109,7 +122,7 @@ class ACK(Packet):
     :type src: :class:`process.Host`
     :param int dest: destination address
     :param int fid: source flow id
-    :param int pid: packet id
+    :param int pid: packet id requested next (Go-back-N)
     """
 
     # Simulated acknowledgement packet size (bits)
@@ -428,6 +441,14 @@ class HostResource(PacketQueue):
     :param int addr: the address of this host
     """
 
+    def __init__(self, env, addr):
+        # Adds the packet dictionary to the HostResource intialization.
+        super(HostResource, self).__init__(env, addr)
+        # dictionary that stores the next expected packet id 
+        # based on source id
+        self._packet_dict = {}
+        
+
     def _receive(self):
         """Receive a packet, yield, and return an outbound packet."""
         event = self._packets.pop(0)
@@ -438,11 +459,48 @@ class HostResource(PacketQueue):
                         " at time {}".format(self._addr, event.packet.flow,
                                              event.packet.id, self._env.now))
             
+            # Create the new acknowledgement packet
+            ack = event.packet.acknowledgement()
+            # get the packet ID and source ID
+            #src = ack.dest()
+
+            #pid = ack.id()
+            # Reassign the id based on the next expected packet id. 
+            #ack.set_id(self._go_back_N(pid, src))
             # Send back an ackonwledgement packet
-            event.succeed(event.packet.acknowledgement())
+            event.succeed(ack)
         else:
             # Transmit the packet
             event.succeed(event.packet)
+
+    def _go_back_N(self, pid, src):
+        """Recieve a packet_id and returns the next expected packet_id
+        based on the host's packet dictionary.
+
+        :param pid: the id of the inbound packet
+        :type: int
+        :param src: the id of the packet's source
+        :type: int
+        :return new packet id:
+        :rtype: int
+        """
+
+        # Check to see if the packet is in the dictionary.
+        # If not, add to the dict, key src with value 0.
+
+        if src not in self._packet_dict:
+            self._packet_dict[src] = 0;
+
+        # Verify if the packet recieved matches the dict value.
+        # If we have a match then the host requests the next request
+        # number.
+        if self._packet_dict[src] == pid:
+            self._packet_dict[src] = pid + 1
+
+        # Return the next requested packet id number
+        return self._packet_dict[src]
+
+
 
 
 class RouterResource(PacketQueue):

@@ -13,6 +13,7 @@ import collections
 
 import resources
 
+PACKETSIZE = 8192
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
