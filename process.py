@@ -309,7 +309,7 @@ class Host(object):
                         " {}".format(self.addr, packet.src, packet.flow, 
                                      packet.id, self.res._env.now))
             # Transmit an outbound packet
-            yield self.res._env.process(self._transport(packet))
+            yield self.res._env.process(self._transport.send(packet))
         else:
             logger.info("host {} transmitting ACK {}, {}, {} at time"
                         " {}".format(self.addr, packet.src, packet.flow,
@@ -327,6 +327,52 @@ class Host(object):
         """
         self._flows.append(flow)
         return len(self._flows) - 1
+
+
+class Transport(object):
+    """This class represents directional transport across a link.
+
+    Direction should be one of :data:`resources.UP` or :data:`resources.DOWN`
+
+    :param link: the underlying link
+    :type link: :class:`Link`
+    :param int direction: packet transmission direction
+    """
+
+    def __init__(self, link, direction):
+        self._link = link
+        self._direction = direction
+
+    def __eq__(self, other):
+        return self._link == other.link and self._direction == other.direction
+
+    def __hash__(self):
+        return self._link.__hash__() * (-1)**(self._direction)
+
+    @property
+    def link(self):
+        """The link that owns this transport handler."""
+        return self._link
+
+    @property
+    def direction(self):
+        """The direction of this transport handler."""
+        return self._direction
+
+    @property
+    def cost(self):
+        """Total (directional) cost of the underlying link."""
+        return self._link.cost(direction)
+
+    def send(self, packet):
+        """Send a packet across the link.
+
+        :param packet: the packet to send
+        :type packet: :class:`resources.Packet`
+        :return: :method:`Link.receive` generating method
+        :rtype: generator
+        """
+        return self._link.receive(self._direction, packet)
 
 
 class Link(object):
@@ -348,12 +394,20 @@ class Link(object):
         # Link delay (simulation time)
         self._delay = delay
 
+        try:
+            # Set static cost equal to delay * (packet size / capacity)
+            self._static_cost = self._delay * \
+                resources.Packet.size / self.res.capacity
+        # If capacity is 0 bps, make the cost infinite
+        except ZeroDivisionError:
+            self._static_cost = float("inf")
+
         # Endpoints for each direction
         self._endpoints = [None, None]
         # "Upload" handler
-        self._up = lambda p: self.receive(resources.UP, p)
+        self._up = Transport(self, resources.UP)
         # "Download" handler
-        self._down = lambda p: self.receive(resources.DOWN, p)
+        self._down = Transport(self, resources.DOWN)
 
     @property
     def delay(self):
@@ -364,6 +418,24 @@ class Link(object):
     def endpoints(self):
         """A list of connected endpoints (up to 1 per direction)"""
         return self._endpoints
+
+    @property
+    def static_cost(self):
+        """The static cost of this link.
+
+        Statc cost is calculated as link delay multiplied by (data) packet
+        size as a proportion of link capacity.
+        """
+        return self._static_cost
+
+    def cost(self, direction):
+        """Return the total cost of a direction on this link.
+
+        Total cost is simply calculated as static cost + dynamic cost.
+
+        :param int direction: link direction to compute cost for
+        """
+        return self._static_cost + self.res.dynamic_cost(direction)
 
     def connect(self, A, B):
         """Connect two network components via this link.
@@ -527,4 +599,4 @@ class Router(object):
         # Determine which transport handler to pass this packet to     
         transport = self._route(packet.addr)       
         # Send the packet      
-        yield self.res._env.process(transport(packet))
+        yield self.res._env.process(transport.send(packet))

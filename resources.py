@@ -213,8 +213,6 @@ class LinkResource(object):
         self._size = size
         # Buffer fill (bits)
         self._fill = [0, 0]
-        # Static link cost
-        self._static_cost = None
         # Link traffic (bps)
         self._traffic = [0, 0]
 
@@ -239,23 +237,6 @@ class LinkResource(object):
         :rtype: int
         """
         return self._size
-
-    @property
-    def static_cost(self):
-        """The static cost of this link.
-
-        Statc cost is calculated as link delay divided by link capacity.
-        """
-        # If static cost is unintialized
-        if self._static_cost is None:
-            try:
-                # Set static cost equal to delay / capacity
-                self._static_cost = self._delay / self._capacity 
-            # If capacity is 0 bps, make the cost infinite
-            except ZeroDivisionError:
-                self._static_cost = float("inf")
-        # Return static cost
-        return self._static_cost
 
     def traffic(self, direction):
         """The traffic across the link in the given direction.
@@ -300,15 +281,6 @@ class LinkResource(object):
         :rtype: float
         """
         return self.traffic(direction) * self.res.fill(direction)
-
-    def cost(self, direction):
-        """Return the total cost of a direction on this link.
-
-        Total cost is simply calculated as static cost + dynamic cost.
-
-        :param int direction: link direction to compute cost for
-        """
-        return self._static_cost + self.dynamic_cost(direction)
 
     def flush(self, direction):
         """Send as many packets as possible from the buffer.
