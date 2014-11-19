@@ -138,7 +138,7 @@ class LinkTransport(simpy.events.Event):
 
     :param link: the link that this transport event binds to
     :type link: :class:`LinkResource`
-    :param bool direction: the (binary) direction of this transport event
+    :param int direction: the direction of this transport event
     :param packet: the packet to transport
     :type packet: :class:`Packet`
     """
@@ -149,18 +149,22 @@ class LinkTransport(simpy.events.Event):
         self._link = link
         self._direction = direction
         self._packet = packet
-        # logger.info("transport event triggered for packet {}, {}, {} at "
-        #             "time {}".format(self._packet.src, self._packet.flow,
-        #                              self._packet.id, self._link._env.now))
 
         # Enqueue the packet for transmission, if the buffer isn't full
         if self._link._fill[direction] + self._packet.size <= self._link.size:
+            # logger.info("enqueuing packet {}, {}, {} at time {}".format(
+            #     self._packet.src, self._packet.flow, self._packet.id, 
+            #     self._link._env.now))
             # Increment buffer fill
             self._link._fill[direction] += self._packet.size
             # Enqueue self._packet
             self._link._queues[direction].append(self)
-            # Flush as much of the buffer as possible through the self._link
-            self._link.flush(direction)
+        else:
+            logger.info("dropped packet {}, {}, {} at time {}".format(
+                self._packet.src, self._packet.flow, self._packet.id, 
+                self._link._env.now))
+        # Flush as much of the buffer as possible through the self._link
+        self._link.flush(direction)
 
     def __enter__(self):
         return self
@@ -238,14 +242,14 @@ class LinkResource(object):
         """
         return self._size
 
-    def traffic(self, direction):
-        """The traffic across the link in the given direction.
+    def available(self, direction):
+        """The available link capacity in the given direction.
 
         :param int direction: link direction
         :return: directional traffic (bps)
         :rtype: int
         """
-        return self._traffic[direction]
+        return self._capacity - self._traffic[direction]
 
     def update_traffic(self, direction, delta):
         """Update the link traffic in a given direction.
@@ -270,18 +274,6 @@ class LinkResource(object):
         """
         return self._fill[direction] / self._size
 
-    def dynamic_cost(self, direction):
-        """Calculate the dynamic cost of a direction on this link.
-
-        Dynamic cost is directly proportional to link traffic and buffer
-        fill.
-
-        :param int direction: link direction to compute dynamic cost for
-        :return: link traffic multiplied by buffer fill proportion
-        :rtype: float
-        """
-        return self.traffic(direction) * self.res.fill(direction)
-
     def flush(self, direction):
         """Send as many packets as possible from the buffer.
 
@@ -297,7 +289,7 @@ class LinkResource(object):
             # Dequeue a packet
             event = self._queues[direction].popleft()
             # If the link isn't busy, flush another packet
-            if event.packet.size + self.traffic(direction) <= self._capacity:
+            if event.packet.size + self._traffic[direction] <= self._capacity:
                 flushed.append(event.packet)
                 # Update buffer fill
                 self._fill[direction] -= event.packet.size

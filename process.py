@@ -29,7 +29,7 @@ class Flow(object):
     :param int dest: the address of the destination host
     :param int data: the total amount of data to transmit (bits)
     :param int window: the transmission window size (bits)
-    :param int timeout: the (simulation) time to wait for :class:`ACK`'s 
+    :param int timeout: the time to wait for :class:`resources.ACK`'s 
     """
 
     def __init__(self, env, host, dest, data, window, timeout, delay):
@@ -254,7 +254,8 @@ class Host(object):
     def connect(self, transport):
         """Connect a new (link) transport handler to this host.
 
-        :param function transport: transport handler
+        :param transport: transport handler
+        :type transport: :class:`Transport`
         :return: None
         """
         self._transport = transport
@@ -265,7 +266,8 @@ class Host(object):
         If the given transport handler is not connected to this host,
         do nothing.
 
-        :param function transport: the transport handler to disconnect
+        :param transport: the transport handler to disconnect
+        :type transport: :class:`Transport`
         :return: None
         """
         if transport == self._transport:
@@ -330,7 +332,7 @@ class Host(object):
 
 
 class Transport(object):
-    """This class represents directional transport across a link.
+    """This class is a directional transport handler for a link.
 
     Direction should be one of :data:`resources.UP` or :data:`resources.DOWN`
 
@@ -361,7 +363,7 @@ class Transport(object):
 
     @property
     def cost(self):
-        """Total (directional) cost of the underlying link."""
+        """Directional cost of the underlying link."""
         return self._link.cost(direction)
 
     def send(self, packet):
@@ -394,14 +396,6 @@ class Link(object):
         # Link delay (simulation time)
         self._delay = delay
 
-        try:
-            # Set static cost equal to delay * (packet size / capacity)
-            self._static_cost = self._delay * \
-                resources.Packet.size / self.res.capacity
-        # If capacity is 0 bps, make the cost infinite
-        except ZeroDivisionError:
-            self._static_cost = float("inf")
-
         # Endpoints for each direction
         self._endpoints = [None, None]
         # "Upload" handler
@@ -419,23 +413,22 @@ class Link(object):
         """A list of connected endpoints (up to 1 per direction)"""
         return self._endpoints
 
-    @property
-    def static_cost(self):
-        """The static cost of this link.
-
-        Statc cost is calculated as link delay multiplied by (data) packet
-        size as a proportion of link capacity.
-        """
-        return self._static_cost
-
     def cost(self, direction):
-        """Return the total cost of a direction on this link.
+        """Return the cost of a direction on this link.
 
-        Total cost is simply calculated as static cost + dynamic cost.
+        Total cost is calculated as the product of propagation delay,
+        (data) packet size, and 1 + buffer fill proportion, divided by
+        the logarithm of available capacity.
 
         :param int direction: link direction to compute cost for
+
         """
-        return self._static_cost + self.res.dynamic_cost(direction)
+        try:
+            return self._delay * resources.Packet.size * \
+                (1 + self.res.fill(direction)) / self.res.available(direction)
+        except ValueError:
+            # Available capacity was 0, so return infinite cost
+            return float("inf")
 
     def connect(self, A, B):
         """Connect two network components via this link.
@@ -507,6 +500,7 @@ class Link(object):
                 self._endpoints[direction].receive(p), self._delay)
             self.res.update_traffic(direction, -p.size)
 
+
 class Router(object):
     """Simpy process representing a router.
 
@@ -542,7 +536,8 @@ class Router(object):
     def connect(self, transport):
         """Connect an outbound link.
 
-        :param function transport: transport handler
+        :param transport: transport handler
+        :type transport: :class:`Transport`
         :return: None
         """
         # Connect a new transport handler to a new "port"
@@ -551,7 +546,8 @@ class Router(object):
     def disconnect(self, transport):
         """Disconnect a link, if it exists.
 
-        :param function transport: the transport handler to disconnect
+        :param transport: the transport handler to disconnect
+        :type transport: :class:`Transport`
         :return: None
         """
         # If the given transport handler is connected, remove it
