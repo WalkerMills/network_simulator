@@ -10,10 +10,102 @@ import queue
 import random
 import simpy
 
+from collections import deque
+
 import resources
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+class FAST(object):
+
+    def __init__(self, flow, window, timeout, alpha, gamma=0.5):
+        self._flow = flow
+        self._window = window
+        self._timeout = timeout
+        self._alpha = alpha
+        self._gamma = gamma
+
+        self._mean_trip = 0
+        self._min_trip = float("inf")
+        self._delay = 0
+
+        self._gen = self._flow._generator()
+        self._unacknowledged = dict()
+        self._dropped = deque()
+
+        self.window_ctrl_proc = self._flow._env.process(self.window_control())
+        self.burst_proc = self._flow._env.process(self.burst())
+
+    def _estimate(self, trip):
+        eta = min(3.0 / self._window, 0.25)
+        mean = (1 - eta) * self._mean_trip + eta * trip
+        self._mean_trip = mean
+
+        if trip < self._min_trip:
+            self._min_trip = trip
+
+        self._delay = self._mean_trip - self._min_trip
+
+    def _update_dropped(self):
+        for packet, time in self._unacknowledged.items():
+            if time < self._flow._env.now - self._timeout:
+                self._dropped.append(packet)
+                del self._unacknowledged[packet]
+
+    def _update_window(self):
+        window = (1 - self._gamma) * self._window + self._gamma * \
+            (self._window * self._min_trip / self._mean_trip + self._alpha)
+        self._window = min(2 * self._window, window)
+
+    def _window_size(self):
+        if len(self._unacknowledged) == 0:
+            return 0
+        
+        ids = sorted(packet.id for packet in self._unacknowledged.keys())
+        return ids[-1] - ids[0] + 1
+
+    def acknowedge(self, packet):
+        rtt = self._flow._env.now - self._unacknowledged[packet]
+        self._estimate(rtt)
+
+    def transmit(self, packet):
+        self._unacknowledged[packet] = self._flow._env.now
+        self._flow.transmit(packet)
+
+    def burst(self, recover=False):
+        if recover:
+            gen = self._dropped.popleft() for i in range(len(self._dropped)
+        else:
+            gen = self._gen
+
+        while True:
+            try:
+                while self._window_size() < self._window:
+                    self.transmit(next(gen))
+
+                    if recover:
+                        self._update_window()
+            except StopIteration:
+                break
+        try:
+            self.window_ctrl_proc.interrupt()
+        except RuntimeError:
+            print('caught RuntimeError')
+
+    def recover(self):
+        self._window /= 2
+        self.burst(recover=True)
+
+    def window_control(self):
+        while True:
+            yield self._flow._env.timeout(self._timeout)
+            self._update_dropped()
+            if len(self._dropped) > 0:
+                self.recover()
+            else:
+                self._update_window()
 
 
 class Flow(object):
@@ -126,6 +218,9 @@ class Flow(object):
              for i in range(n))
 
         return g
+
+    def transmit(self, packet):
+        yield self._env.process(self._host.receive(packet))
 
     def generate(self):
         """Generate and transmit outbound data packets.
