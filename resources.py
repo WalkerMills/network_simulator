@@ -4,6 +4,7 @@
     :synopsis: This module defines network components as SimPy resources
 """
 
+import heapq
 import logging
 import queue
 import simpy
@@ -93,13 +94,14 @@ class Packet(object):
         """
         return self._data
 
-    def acknowledgement(self):
+    def acknowledgement(self, expected):
         """Generate an acknowledgement for this packet.
 
+        :param int expected: the next packet id expected (ACK payload)
         :return: an acknowledgement packet matching this packet
         :rtype: :class:`ACK`
         """
-        return ACK(self._dest, self._src, self._flow, self._id)
+        return ACK(self._dest, self._src, self._flow, self._id, expected)
 
 
 class ACK(Packet):
@@ -110,13 +112,14 @@ class ACK(Packet):
     :param int dest: destination address
     :param int fid: source flow id
     :param int pid: packet id
+    :param int expected: next expected packet id
     """
 
     # Simulated acknowledgement packet size (bits)
     size = 512
     """Packet size (bits)."""
 
-    def __init__(self, src, dest, fid, pid):
+    def __init__(self, src, dest, fid, pid, expected):
         # Packet source address
         self._src = src
         # Packet destination address
@@ -126,7 +129,7 @@ class ACK(Packet):
         # ID of the packet which triggered this acknowledgement
         self._id = pid
         # Acknowledgement packets have no payload
-        self._data = None
+        self._data = expected
 
 
 class LinkTransport(simpy.events.Event):
@@ -152,7 +155,7 @@ class LinkTransport(simpy.events.Event):
 
         # Enqueue the packet for transmission, if the buffer isn't full
         if self._link._fill[direction] + self._packet.size <= self._link.size:
-            # logger.info("enqueuing packet {}, {}, {} at time {}".format(
+            # logger.info("enqueueing packet {}, {}, {} at time {}".format(
             #     self._packet.src, self._packet.flow, self._packet.id, 
             #     self._link._env.now))
             # Increment buffer fill
@@ -338,7 +341,7 @@ class ReceivePacket(simpy.events.Event):
 
 
 class PacketQueue(object):
-    """SimPy resource for queuing packets.
+    """SimPy resource for queueing packets.
 
     This class is a FIFO SimPy resource. It receives packets, but does not
     accept packet transmission requests.  Every packet arrival triggers
@@ -390,20 +393,45 @@ class HostResource(PacketQueue):
     :param int addr: the address of this host
     """
 
+    def __init__(self, env, addr):
+        super(HostResource, self).__init__(env, addr)
+        # A hash table mapping (src, flow) -> min heap of expected indices
+        self._expected = dict()
+
     def _receive(self):
         """Receive a packet, yield, and return an outbound packet."""
+        # Pop a packet from the queue
         event = self._packets.pop(0)
-
         # If a data packet has reached its destination
         if event.packet.dest == self.addr and event.packet.size == Packet.size:
             logger.info("host {} triggering acknowledgement for packet {}, {}"
                         " at time {}".format(self._addr, event.packet.flow,
                                              event.packet.id, self._env.now))
-            
-            # Send back an ackonwledgement packet
-            event.succeed(event.packet.acknowledgement())
+            # Get the event's ID in the hash table
+            flow = (event.packet.src, event.packet.flow)
+            # If the flow doesn't have an entry
+            if flow not in self._expected.keys():
+                # Initialize the min heap to expect the 0th packet first
+                self._expected[flow] = [0]
+            # Min heap for this flow
+            heap = self._expected[flow]
+            # If we got the packet we were expecting
+            if event.packet.id == heap[0]:
+                # And we haven't already received the next packet
+                if heap[0] + 2 not in heap[1:3]
+                    # Set the heap to expect the next packet in the sequence
+                    # (replaces heapq.heappoppush for this specific case)
+                    heap[0] += 1
+                else:
+                    # Pop the ID of the received packet off the heap
+                    heapq.heappop(heap)
+            else:
+                # Push the ID expected after this packet onto the heap
+                heapq.heappush(event.packet.id + 1)
+            # Return an acknowledgement with the next expected ID
+            event.succeed(packet.acknowledgement(heap[0]))
         else:
-            # Transmit the packet
+            # Return the packet popped from the queue
             event.succeed(event.packet)
 
 
