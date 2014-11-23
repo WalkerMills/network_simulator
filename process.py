@@ -62,6 +62,24 @@ class FAST(object):
 
         self._window_ctrl_proc = None
 
+    @property
+    def window(self):
+        """Transmission window size, in bits.
+
+        :return: window size (bits)
+        :rtype: int
+        """
+        return self._window
+
+    @property
+    def timeout(self):
+        """The time after which packets are considered dropped.
+
+        :return: acknowledgement timeout (simulation time)
+        :rtype: int
+        """
+        return self._time
+
     def _estimate(self, trip):
         # Calculate weight for round trip mean update
         eta = min(3.0 / self._window, 0.25)
@@ -82,7 +100,7 @@ class FAST(object):
 
     def _update_dropped(self):
         # For each unacknowledged packet
-        for packet, time in self._unacknowledged.items():
+        for packet, time in list(self._unacknowledged.items())[:]:
             # If it has timed out
             if time <= self._flow.env.now - self._timeout:
                 # Mark it as dropped
@@ -136,22 +154,11 @@ class FAST(object):
         # If we have 3 dropped ACK's
         if self._next.count(self._next[0]) == 3:
             # Enter recovery
-            self.recover()
+            yield self._flow.env.process(self.recover())
 
-        # Try to inject packets into the network
-        yield self._flow.env.process(self.burst())
-
-    def transmit(self, packet):
-        """Transmit an outbound packet.
-
-        :param packet: the outbound packet
-        :type packet: :class:`resources.Packet`
-        :return: None
-        """
-        # Mark the outbound packet as unacknowledged
-        self._unacknowledged[packet] = self._flow.env.now
-        # Transmit the packet
-        self._flow.transmit(packet)
+        if self._gen is not None:
+            # Try to inject packets into the network
+            yield self._flow.env.process(self.burst())
 
     def burst(self, recover=False):
         """Inject packets into the network.
@@ -175,13 +182,15 @@ class FAST(object):
         else:
             # Otherwise, take packets from the data packet generator
             gen = self._gen
-
         try:
             # While the window is not full
             while self._window_size() < self._window:
-                # Transmit the next data packet
-                self.transmit(next(gen))
-
+                # Get the next data packet
+                packet = next(gen)
+                # Mark the packet as unacknowledged
+                self._unacknowledged[packet] = self._flow.env.now
+                # Transmit the packet
+                yield self._flow.env.process(self._flow.transmit(packet))
                 # If we are in recovery mode
                 if recover:
                     # Update the window (size)
@@ -190,6 +199,8 @@ class FAST(object):
         except StopIteration:
             # If we exhausted the data packet generator
             if not recover:
+                # Set the generator to None
+                self._gen = None
                 # While there remains dropped packets
                 while not self._dropped.empty():
                     # Retransmit as many dropped packets as possible
@@ -202,7 +213,7 @@ class FAST(object):
                     # Kill the window control process
                     self._window_ctrl_proc.interrupt()
                 except RuntimeError:
-                    print('caught RuntimeError')
+                    pass
 
     def recover(self):
         """Enter recovery mode.
@@ -212,25 +223,28 @@ class FAST(object):
         # Halve the window size
         self._window /= 2
         # Retransmit as many dropped packets as possible
-        self.burst(recover=True)
+        yield self._flow.env.process(self.burst(recover=True))
 
     def window_control(self):
         """Periodically update the window size.
 
         :return: None
         """
-        while True:
-            # Wait for acknowledgements
-            yield self._flow.env.timeout(self._timeout)
-            # Update dropped packets
-            self._update_dropped()
-            # If there exist dropped packets
-            if not self._dropped.empty():
-                # Enter recovery mode (updates window size)
-                self.recover()
-            else:
-                # Otherwise, just update the window size
-                self._update_window()
+        try:
+            while True:
+                # Wait for acknowledgements
+                yield self._flow.env.timeout(self._timeout)
+                # Update dropped packets
+                self._update_dropped()
+                # If there exist dropped packets
+                if not self._dropped.empty():
+                    # Enter recovery mode (updates window size)
+                    yield self._flow.env.process(self.recover())
+                else:
+                    # Otherwise, just update the window size
+                    self._update_window()
+        except simpy.events.Interrupt:
+            pass
 
     def run(self):
         """Run the TCP algorithm (send all data packets).
@@ -241,6 +255,7 @@ class FAST(object):
         self._window_ctrl_proc = self._flow.env.process(self.window_control())
         # Yield a burst process
         yield self._flow.env.process(self.burst())
+
 
 class Flow(object):
     """SimPy process representing a flow.
@@ -258,7 +273,7 @@ class Flow(object):
     :param int timeout: the time to wait for :class:`resources.ACK`'s 
     """
 
-    def __init__(self, env, host, dest, data, window, timeout, delay):
+    def __init__(self, env, host, dest, data, delay, tcp_params):
         self.env = env
         # Flow host
         self._host = host
@@ -267,12 +282,13 @@ class Flow(object):
         # Amount of data to transmit (bits)
         self._data = data
         # Window size for this flow
-        self._window = window
+        # self._window = window
         # Time (simulation time) to wait for an acknowledgement before
         # retransmitting a packet
-        self._time = timeout
+        # self._time = timeout
         # Time (simulation time) to wait before initial transmission
         self._delay = delay
+        self._tcp = FAST(self, *tcp_params)
 
         # TOOD: initialize/integrate TCP
 
@@ -305,24 +321,6 @@ class Flow(object):
         :rtype: int
         """
         return self._id
-
-    @property
-    def timeout(self):
-        """The time after which packets are considered dropped.
-
-        :return: acknowledgement timeout (simulation time)
-        :rtype: int
-        """
-        return self._time
-
-    @property
-    def window(self):
-        """Transmission window size, in bits.
-
-        :return: window size (bits)
-        :rtype: int
-        """
-        return self._window
 
     def generator(self):
         """Create a packet generator.
@@ -357,8 +355,7 @@ class Flow(object):
         yield self.env.process(self._host.receive(packet))
 
     def generate(self):
-        """Generate packets from this flow.
-        """
+        """Generate packets from this flow."""
         yield self.env.timeout(self._delay)
         yield self.env.process(self._tcp.run())
 
@@ -381,7 +378,7 @@ class Flow(object):
         logger.info("flow {}, {} acknowledges packet {} at time {}".format(
             self._id, self._host.addr, ack.id, self.env.now))
         # Send this acknowledgement to the TCP algorithm
-        self._tcp.acknowledge(ack)
+        yield self.env.process(self._tcp.acknowledge(ack))
 
 
 class Host(object):

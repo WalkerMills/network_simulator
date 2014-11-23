@@ -94,7 +94,7 @@ class Packet(object):
         """
         return self._data
 
-    def acknowledgement(self, expected):
+    def acknowledge(self, expected):
         """Generate an acknowledgement for this packet.
 
         :param int expected: the next packet id expected (ACK payload)
@@ -432,7 +432,7 @@ class HostResource(PacketQueue):
             while heap[0] + 1 in heap[1:3]:
                 heapq.heappop(heap)
             # Return an acknowledgement with the next expected ID
-            event.succeed(packet.acknowledgement(heap[0]))
+            event.succeed(event.packet.acknowledge(heap[0]))
         else:
             # Return the packet popped from the queue
             event.succeed(event.packet)
