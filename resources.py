@@ -148,7 +148,7 @@ class LinkTransport(simpy.events.Event):
 
     def __init__(self, link, direction, packet):
         # Initialize event
-        super(LinkTransport, self).__init__(link._env)
+        super(LinkTransport, self).__init__(link.env)
         self._link = link
         self._direction = direction
         self._packet = packet
@@ -157,7 +157,7 @@ class LinkTransport(simpy.events.Event):
         if self._link._fill[direction] + self._packet.size <= self._link.size:
             # logger.info("enqueueing packet {}, {}, {} at time {}".format(
             #     self._packet.src, self._packet.flow, self._packet.id, 
-            #     self._link._env.now))
+            #     self._link.env.now))
             # Increment buffer fill
             self._link._fill[direction] += self._packet.size
             # Enqueue self._packet
@@ -165,7 +165,7 @@ class LinkTransport(simpy.events.Event):
         else:
             logger.info("dropped packet {}, {}, {} at time {}".format(
                 self._packet.src, self._packet.flow, self._packet.id, 
-                self._link._env.now))
+                self._link.env.now))
         # Flush as much of the buffer as possible through the self._link
         self._link.flush(direction)
 
@@ -213,7 +213,7 @@ class LinkResource(object):
     """
 
     def __init__(self, env, capacity, size):
-        self._env = env
+        self.env = env
         # Link capacity (bps)
         self._capacity = capacity
         # Buffer size (bits)
@@ -321,7 +321,7 @@ class ReceivePacket(simpy.events.Event):
 
     def __init__(self, resource, packet):
         # Initialize event
-        super(ReceivePacket, self).__init__(resource._env)
+        super(ReceivePacket, self).__init__(resource.env)
         self.resource = resource
         self.packet = packet
 
@@ -353,7 +353,7 @@ class PacketQueue(object):
     """
 
     def __init__(self, env, addr):
-        self._env = env
+        self.env = env
         # Router address
         self._addr = addr
         # Queue of packet events to process
@@ -406,7 +406,7 @@ class HostResource(PacketQueue):
         if event.packet.dest == self.addr and event.packet.size == Packet.size:
             logger.info("host {} triggering acknowledgement for packet {}, {}"
                         " at time {}".format(self._addr, event.packet.flow,
-                                             event.packet.id, self._env.now))
+                                             event.packet.id, self.env.now))
             # Get the event's ID in the hash table
             flow = (event.packet.src, event.packet.flow)
             # If the flow doesn't have an entry
@@ -418,7 +418,7 @@ class HostResource(PacketQueue):
             # If we got the packet we were expecting
             if event.packet.id == heap[0]:
                 # And we haven't already received the next packet
-                if heap[0] + 2 not in heap[1:3]
+                if heap[0] + 2 not in heap[1:3]:
                     # Set the heap to expect the next packet in the sequence
                     # (replaces heapq.heappoppush for this specific case)
                     heap[0] += 1
@@ -428,6 +428,9 @@ class HostResource(PacketQueue):
             else:
                 # Push the ID expected after this packet onto the heap
                 heapq.heappush(event.packet.id + 1)
+            # Pop any ID's for packet's we've already received
+            while heap[0] + 1 in heap[1:3]:
+                heapq.heappop(heap)
             # Return an acknowledgement with the next expected ID
             event.succeed(packet.acknowledgement(heap[0]))
         else:
@@ -441,7 +444,7 @@ class RouterResource(PacketQueue):
     This is a FIFO resource which handles packets for a router. When a
     routing packet is received, it triggers outbound routing packet
     transmission, and possibly a routing table update.  All outbound data
-    or routing packets are added to a sigle, infinite capacity queue, to
+    or routing packets are added to a single, infinite capacity queue, to
     be popped and sent along the appropriate transport handler. 
 
     :param simpy.Environment env: the simulation environment
