@@ -24,7 +24,10 @@ class FAST(object):
 
     :param flow: the flow to link this TCP instance to
     :type flow: :class:`Flow`
-    :param window:
+    :param int window: initial window size (in packets)
+    :param int timeout: packet acknowledgement timeout (simulation time)
+    :param int alpha: desired number of enqueued packets at equilibrium
+    :param float gamma: window update weight
     """
 
     def __init__(self, flow, window, timeout, alpha, gamma=0.5):
@@ -106,6 +109,12 @@ class FAST(object):
         return ids[-1] - ids[0] + 1
 
     def acknowledge(self, ack):
+        """Process an acknowledgement packet.
+
+        :param ack: the acknowledgement packet
+        :type ack: :class:`resources.ACK`
+        :return: None
+        """
         # ID of the packet being acknowledged
         pid = ack.id
         # ID expected next by the destination host
@@ -133,12 +142,26 @@ class FAST(object):
         yield self._flow.env.process(self.burst())
 
     def transmit(self, packet):
+        """Transmit an outbound packet.
+
+        :param packet: the outbound packet
+        :type packet: :class:`resources.Packet`
+        :return: None
+        """
         # Mark the outbound packet as unacknowledged
         self._unacknowledged[packet] = self._flow.env.now
         # Transmit the packet
         self._flow.transmit(packet)
 
     def burst(self, recover=False):
+        """Inject packets into the network.
+
+        If recover is True, then the packets are taken from the dropped
+        packet queue.
+
+        :param bool recover: flag for recovery mode
+        :return: None
+        """
         # If we are in recovery mode
         if recover:
             # Take packets from the dropped packet queue, as long as there
@@ -182,12 +205,20 @@ class FAST(object):
                     print('caught RuntimeError')
 
     def recover(self):
+        """Enter recovery mode.
+
+        :return: None
+        """
         # Halve the window size
         self._window /= 2
         # Retransmit as many dropped packets as possible
         self.burst(recover=True)
 
     def window_control(self):
+        """Periodically update the window size.
+
+        :return: None
+        """
         while True:
             # Wait for acknowledgements
             yield self._flow.env.timeout(self._timeout)
@@ -202,6 +233,10 @@ class FAST(object):
                 self._update_window()
 
     def run(self):
+        """Run the TCP algorithm (send all data packets).
+
+        :return: None
+        """
         # Start the window control process
         self._window_ctrl_proc = self._flow.env.process(self.window_control())
         # Yield a burst process
