@@ -262,18 +262,28 @@ class Flow(object):
 
     Each flow process is connected to a source host, and generates as
     many packets as are necessary to send all of its data.  If data is
-    None, a random, 8-bit number of packets are sent.
+    None, a random, 8-bit number of packets are sent.  Every flow needs
+    a TCP algorithm to be specified, from among the currently supported
+    TCP algorithms.  At the moment, the only allowed specifier is 
+    \"FAST\".  See :class:`FAST` for details on what tcp_params should
+    look like.
 
     :param simpy.Environment env: the simulation environment
     :param host: the source host of this flow
     :type host: :class:`Host`
     :param int dest: the address of the destination host
     :param int data: the total amount of data to transmit (bits)
-    :param int window: the transmission window size (bits)
-    :param int timeout: the time to wait for :class:`resources.ACK`'s 
+    :param int delay: the simulation time to wait before sending any packets
+    :param str tcp: TCP algorithm specifier
+    :param list tcp_params: parameters for the TCP algorithm
     """
 
-    def __init__(self, env, host, dest, data, delay, tcp_params):
+    # TODO: update Flow docstring
+
+    allowed_tcp = {"FAST": FAST}
+    """A dict mapping TCP specifiers to implementations (classes)."""
+
+    def __init__(self, env, host, dest, data, delay, tcp, tcp_params):
         self.env = env
         # Flow host
         self._host = host
@@ -281,17 +291,14 @@ class Flow(object):
         self._dest = dest
         # Amount of data to transmit (bits)
         self._data = data
-        # Window size for this flow
-        # self._window = window
-        # Time (simulation time) to wait for an acknowledgement before
-        # retransmitting a packet
-        # self._time = timeout
         # Time (simulation time) to wait before initial transmission
         self._delay = delay
-        self._tcp = FAST(self, *tcp_params)
-
-        # TOOD: initialize/integrate TCP
-
+        # Check for a valid TCP specifier
+        if tcp in self.allowed_tcp:
+            # Initialize TCP object
+            self._tcp = self.allowed_tcp[tcp](self, *tcp_params)
+        else:
+            raise ValueError("unsupported TCP algorithm \"{}\"".format(tcp))
         # Register this flow with its host, and get its ID
         self._id = self._host.register(self)
 
@@ -482,7 +489,7 @@ class Host(object):
             # Transmit an outbound packet
             yield self.res.env.process(self._transport.send(packet))
         else:
-            logger.info("host {} transmitting ACK {}, {}, {} at time"
+            logger.info("host {} processing ACK {}, {}, {} at time"
                         " {}".format(self.addr, packet.src, packet.flow,
                                      packet.id, self.res.env.now))
             # Send an inbound ACK to its destination flow

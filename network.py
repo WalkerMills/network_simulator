@@ -24,13 +24,20 @@ class Network(object):
     adjacency list should be formatted as [((src, dest), (capacity, buffer
     size, delay))], where src & dest are formatted as a string with a
     leading \"h\" or \"r\", specifying a host or router, followed by an
-    integer id.  Flows should be given as [((src, dest), (data, window,
-    timeout))], where src & dest are formatted as previously, but only host
-    tags are allowed.  All parameters should be specified in bits or bps.
+    integer id.  Flows should be given as [((src, dest), ((data, delay),
+    (tcp, tcp_param)))], where src & dest are formatted as previously, but
+    only host tags are allowed.  Link arguments are all in bits/bps, as
+    is the data parameter for flows.  Delay is given in simulation time.
+    The tcp parameter is a string which determines which TCP algorithm to
+    use; accepted values are currently \"FAST\".  The tcp_param parameter
+    is a list containing the arguments for initializing the TCP object,
+    and will change depending on the TCP algorithm specified.  See
+    :mod:`process` for details of the currently implemented TCP
+    algorithms.
 
     :param adjacent: adjacency lists of links & flows defining a network
-    :type adjacent`: ([(str, str), (int, int, int)], 
-                    [(str, str), (int, int, int)])
+    :type adjacent`: ([((str, str), (int, int, int))], 
+                      [((str, str), ((int, int), (str, list)))])
     """
 
     def __init__(self, adjacent=None):
@@ -112,7 +119,7 @@ class Network(object):
             self._links.append(link)
 
         # For each inputted flow
-        for (src_tag, dest_tag), parameters in flows:
+        for (src_tag, dest_tag), ((data, delay), (tcp, tcp_param)) in flows:
             # Get the source host
             src = self._hosts[int(src_tag[1])]
             # Get the destination address
@@ -120,7 +127,8 @@ class Network(object):
             logger.info('creating flow between hosts {} and {}'.format(
                 src.addr, dest))
             # Create & persist the new flow
-            self._flows.append(process.Flow(self.env, src, dest, *parameters))
+            self._flows.append(process.Flow(self.env, src, dest, data, delay,
+                                            tcp, tcp_param))
 
     def simulate(self, until_=None):
         """Run the initialized simulation.
