@@ -53,7 +53,7 @@ class Flow(object):
         # The slowstart threshold. Set it to be a large number
         self._ssthresh = 100000
         # Queue to check for duplicate ACKs for packet loss
-        # self._dupQueue = collections.deque(maxlen = 4)
+        self._dupQueue = collections.deque(maxlen = 4)
         # Counter to check for duplicate ACKs for packet loss
         self._dupCount = 0
         # Register this flow with its host, and get its ID
@@ -66,6 +66,8 @@ class Flow(object):
         self._sent = 0
         # Initialize per-window sent data counter
         self._window_sent = 0
+        # Initialize window sent data counter for the next window
+        self._window2_sent = 0
         # Wait to receive acknowledgement (passivation event)
         self._wait_for_ack = self._env.event()
 
@@ -135,6 +137,23 @@ class Flow(object):
 
         return g
 
+    def next_packet(self):
+        logger.info(
+            "flow {}, {} sending packet {} at time {}".format(
+                self._id, self._host.addr, self._sent, 
+                self._env.now))
+        # Generate the next packet to send
+        packet = next(self._packets)
+        # Increment the count of generated packets
+        self._sent += 1
+        # Increment the counter for data sent in this window
+        self._window2_sent += packet.size
+        # Add the packet to the map of unacknowedged packets
+        self._outbound[packet.id] = packet
+        # Send the packet through the connected host
+        yield self._env.process(self._host.receive(packet))
+
+
     def generate(self):
         """Generate and transmit outbound data packets.
 
@@ -162,7 +181,7 @@ class Flow(object):
                     # Increment the count of generated packets
                     self._sent += 1
                     # Increment the counter for data sent in this window
-                    self._window_sent += resources.Packet.size
+                    self._window_sent += packet.size
                     # Add the packet to the map of unacknowedged packets
                     self._outbound[packet.id] = packet
                     # Send the packet through the connected host
@@ -170,7 +189,8 @@ class Flow(object):
                 # Passivate packet generation
                 yield self._wait_for_ack
                 # On reactivation, reset data counter for new window
-                self._window_sent = 0
+                self._window_sent = self._window2_sent
+                self._window2_sent = 0
             except StopIteration:
                 # Stop trying to send packets once we run out
                 break
@@ -198,12 +218,18 @@ class Flow(object):
         logger.info("flow {}, {} acknowledges packet {} at time {}".format(
             self._id, self._host.addr, ack.id, self._env.now))
 
-         # For an acknowledgement received, react with tcp reno
-        yield self._env.process(self._tcp_reno(ack))
+        # Acknowledge the packet whose ACK was received
+        del self._outbound[ack.id]
 
-        # Continue sending more packets
-        self._wait_for_ack.succeed()
-        self._wait_for_ack = self._env.event()
+        # For an acknowledgement received, react with tcp reno
+        self._next_packet()
+        self._tcp_reno(ack)
+        
+        # if the ACK packet is not from a retransmitted packet
+        if ack.id >= self._sent - self._window:
+            # Continue sending more packets
+            self._wait_for_ack.succeed()
+            self._wait_for_ack = self._env.event()
     
     def _wait_timeout(self):
         """ Wait for timeout time for acknowledgement packets
@@ -215,15 +241,19 @@ class Flow(object):
         # Packet Loss Detection #1: Timeout
         # if we sent enough packets to fill the current window
         # and we have outstanding packets that have not been acknowledged yet
-        while self._window_sent >= self._window and len(self._outbound) == 0:
+        while self._window_sent >= self._window and len(self._outbound) != 0:
             logger.info("Waiting for timeout at time {}".format(self._env.now))
             # wait for timeout time to see that we receive the ACK
             try:
                 yield self._env.timeout(self._time)
-            except simpy.Interrupt:
+                # we've timed out, so half the window size
+                self._window /= 2
+                # TODO: call fast recovery
+                # break out of while loop
+                break
+            except simpy.Interrupt: # condition (len(_outbound) == 0)
                 # when we receive an interrupt, we stop waiting
                 return
-
 
     def _tcp_dupACK(self, ack):
         """ Keeps track of duplicate acknowledgements for TCP reno
@@ -245,19 +275,6 @@ class Flow(object):
             logger.info("Received 3 duplicate ACKS of id {} at time {}".format(
                 ack.id, self._env.now))
             self._window /= 2
-
-        # Replacing this part with a counter Nov 20th
-        # also, line 56 goes with this commenting out if we decide we do not
-        # want to use deque for sure
-        # # Packet Loss Detection #2: 3 Duplicate ACKs
-        # # append the id of the new acknowledgement packet that we just received
-        # self._dupQueue.append(ack.id)
-        # # if all four in the queue are the same, reduce window size
-        # if self._dupQueue.count(ack.id) == 4:
-        #     logger.info("Received 3 duplicate ACKS of id {} at time {}".format(
-        #         ack.id, self._env.now))
-        #     self._window /= 2
-
 
     def _tcp_reno(self, ack):
         """ 
