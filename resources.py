@@ -84,13 +84,14 @@ class Packet(object):
         """
         return self._id
 
-    @id.setter
+    # @id.setter
     def set_id(self, value):
         """Sets this packet's ID to a new value
 
         :param function value: new value of the ID
         :return: None
         """
+        logger.info("setter called")
         self._id = value
 
     @property
@@ -462,11 +463,12 @@ class HostResource(PacketQueue):
             # Create the new acknowledgement packet
             ack = event.packet.acknowledgement()
             # get the packet ID and source ID
-            #src = ack.dest()
+            src = ack.dest
 
-            #pid = ack.id()
+            pid = ack.id
             # Reassign the id based on the next expected packet id. 
-            #ack.set_id(self._go_back_N(pid, src))
+            test = self._go_back_N(pid, src)
+            ack.set_id(test)
             # Send back an ackonwledgement packet
             event.succeed(ack)
         else:
@@ -497,8 +499,8 @@ class HostResource(PacketQueue):
         if self._packet_dict[src] == pid:
             self._packet_dict[src] = pid + 1
 
-        # Return the next requested packet id number
-        return self._packet_dict[src]
+        # Return the id of the packet last correctly received
+        return self._packet_dict[src] - 1
 
 
 
