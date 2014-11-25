@@ -137,7 +137,7 @@ class Flow(object):
 
         return g
 
-    def next_packet(self):
+    def _next_packet(self):
         logger.info(
             "flow {}, {} sending packet {} at time {}".format(
                 self._id, self._host.addr, self._sent, 
@@ -223,8 +223,8 @@ class Flow(object):
 
         # For an acknowledgement received, react with tcp reno
         self._next_packet()
-        self._tcp_reno(ack)
-        
+        yield self._env.process(self._tcp_reno(ack))
+
         # if the ACK packet is not from a retransmitted packet
         if ack.id >= self._sent - self._window:
             # Continue sending more packets
