@@ -63,6 +63,8 @@ class Flow(object):
         self._sent = 0
         # Initialize per-window sent data counter
         self._window_sent = 0
+        # Initialize window sent data counter for the next window
+        self._window2_sent = 0
         # Wait to receive acknowledgement (passivation event)
         self._wait_for_ack = self._env.event()
 
@@ -132,6 +134,23 @@ class Flow(object):
 
         return g
 
+def next_packet(self):
+    logger.info(
+        "flow {}, {} sending packet {} at time {}".format(
+            self._id, self._host.addr, self._sent, 
+            self._env.now))
+    # Generate the next packet to send
+    packet = next(self._packets)
+    # Increment the count of generated packets
+    self._sent += 1
+    # Increment the counter for data sent in this window
+    self._window2_sent += packet.size
+    # Add the packet to the map of unacknowedged packets
+    self._outbound[packet.id] = packet
+    # Send the packet through the connected host
+    yield self._env.process(self._host.receive(packet))
+
+
     def generate(self):
         """Generate and transmit outbound data packets.
 
@@ -144,7 +163,7 @@ class Flow(object):
         """
         # Yield initial delay
         yield self._env.timeout(self._delay)
-
+     
         # Send all the packets
         while True:
             try:
@@ -164,10 +183,13 @@ class Flow(object):
                     self._outbound[packet.id] = packet
                     # Send the packet through the connected host
                     yield self._env.process(self._host.receive(packet))
+
                 # Passivate packet generation
-                yield self._wait_for_ack
+                yield self._wait_for_ack # wait to acknowledge all window packets
+
                 # On reactivation, reset data counter for new window
-                self._window_sent = 0
+                self._window_sent = self._window2_sent
+                self._window2_sent = 0
             except StopIteration:
                 # Stop trying to send packets once we run out
                 break
@@ -199,12 +221,13 @@ class Flow(object):
         del self._outbound[ack.id]
 
         # For an acknowledgement received, react with tcp reno
+        self._next_packet()
         self._tcp_reno(ack)
 
         # If this ACK is not from a re-transmitted packet
         if ack.id >= self._sent - self._window:
             # Wait for other acknowledgements
-            yield self._env.timeout(self._time)
+           # yield self._env.timeout(self._time)
 
             # TODO congestion control
 
