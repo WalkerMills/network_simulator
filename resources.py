@@ -132,6 +132,30 @@ class ACK(Packet):
         self._data = expected
 
 
+class RoutingPacket(Packet):
+	"""This class represents a routing packet.
+
+	:param int pid: packet id
+    :param object payload: packet payload
+	"""	
+
+	# Simulated routing packet size (bits)
+	size = 512
+	"""Packet size (bits)"""
+
+	def __init__(self, pid, payload):
+        # Packet source address
+        self._src = None
+        # Packet destination address
+        self._dest = None
+        # Flow ID on the source host
+        self._flow = None
+        # Packet ID
+        self._id = pid
+        # Packet data
+        self._data = payload
+
+
 class LinkTransport(simpy.events.Event):
     """SimPy event representing directional packet transmission.
 
@@ -437,24 +461,10 @@ class HostResource(PacketQueue):
             # Return the packet popped from the queue
             event.succeed(event.packet)
 
+    def _begin_bellman_ford(self, host_id):
+        '''Called by the network process. Begins the process of updating '''
 
-class RouterResource(PacketQueue):
-    """SimPy resource representing a router.
-
-    This is a FIFO resource which handles packets for a router. When a
-    routing packet is received, it triggers outbound routing packet
-    transmission, and possibly a routing table update.  All outbound data
-    or routing packets are added to a single, infinite capacity queue, to
-    be popped and sent along the appropriate transport handler. 
-
-    :param simpy.Environment env: the simulation environment
-    :param int addr: the address of this router
-    """
-
-    def _receive(self):
-        """Receive a packet, yield, and return an outbound packet."""
-
-        # TODO: handle routing packets
-
-        event = self._packets.pop(0)
-        event.succeed(event.packet)
+        #outline:
+        #the network class calls this function it begins the routing update
+        #process by creating a routing packet with the host_id and the cost
+        #of the link connecting it to a host

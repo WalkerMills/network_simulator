@@ -552,6 +552,14 @@ class Transport(object):
         """
         return self._link.receive(self._direction, packet)
 
+    def reverse(self):
+        """Return a transport handler in the opposite direction.
+
+        :return: transport handler
+        :rtype: :class:`Transport`
+        """
+        return Transport(self.link, 1 - self.direction)
+
 
 class Link(object):
     """SimPy process representing a link.
@@ -695,10 +703,13 @@ class Router(object):
         self.res = resources.PacketQueue(env, addr)
         # Address of this router (router ID's are independent of host ID's)
         self._addr = addr
-        # Set of outbound links
-        self._links = set()
+        # Set of transports connected to outbound links
+        self._links = list()
         # Dictionary mapping outbound links to destinations
-        self._table = dict()
+        self._routing_table = dict()
+        # Dictionary mapping outbound links to destinations (used to build
+        # a new routing table before replacing old table)
+        self._update_table = dict()
 
     @property
     def addr(self):
@@ -730,7 +741,7 @@ class Router(object):
         self._links.discard(transport)
         try:
             # Delete this outbound link from the routing table
-            del self._table[transport]
+            del self._routing_table[transport]
         except KeyError:
             # If it doesn't exist, do nothing
             pass
@@ -744,10 +755,20 @@ class Router(object):
         """
         logger.info("router {} received packet {} at time {}".format(
             self.addr, packet.id, self.res.env.now))
+
         # Push another packet through the queue
         packet = yield self.res.receive(packet)
-        # Transmit the dequeued packet
-        yield self.res.env.process(self.transmit(packet))
+
+        # first determine what type of packet it is, then process it 
+        if type(packet) == Routing_Packet:
+            self._handle_routing_packet(packet)
+        else
+            self._handle_data_packet(packet)
+
+        # Transmit each packet on all ports
+        for packet in packets:
+            # Transmit the dequeued packet
+            yield self.res.env.process(self.transmit(packet))
 
     def _route(self, address):
         """Return the correct transport handler for the given address.
@@ -757,18 +778,71 @@ class Router(object):
         :rtype: function
         """
         
-        # TODO: return a transport handler based on the given address
+        return self._routing_table[packet._dest][0]
 
-        pass
-
-    def transmit(self, packet):     
+    def transmit(self, packet, transport):     
         """Transmit an outbound packet.        
        
         :param packet: the outbound packet     
-        :type packet: :class:`resources.Packet`        
+        :type packet: :class:`resources.Packet`  
+        :param transport: the outbound transport handler
+        :type transport: :class:`resources.Transport`      
         :return: None      
-        """        
-        # Determine which transport handler to pass this packet to     
-        transport = self._route(packet.addr)       
+        """               
         # Send the packet      
         yield self.res.env.process(transport.send(packet))
+
+    def _handle_routing_packet(self, event):
+
+        host, cost, path, port = event.packet.data
+
+        # check if router_id is already in path
+        for i in len(path):
+            # if packet has already gone through router, ignore it
+            if path[i] == self._id:
+                return                
+
+        # update new routing table
+        if (self._update_table[host][1] >= cost):
+            self._update_table[host] = (port, cost)
+
+
+        # create a new routing packet for each outbound link that's
+        # not a host and adjust the cost for each link
+        for transport in self._links:
+            # don't send routing packets to hosts or to the router
+            # that sent the recently received packet.
+            neighbor_type = transport.link.endpoints
+            if HostResource in map(type, transport.link.endpoints) ||
+                    transport == port:
+                continue
+
+            # update packet path and cost
+            new_path = path.append(self._id) ##do outside loop
+            new_cost = cost + transport.cost
+            # create reference to outbound port for this router on the 
+            # router receiving the packet 
+            new_link_ref = transport.reverse()
+            # create new packet
+            new_pkt = RoutingPacket(packet.pid, 
+                (host, new_cost, new_path, new_link_ref))
+            # send the newly created packet
+            self.transmit(new_pkt, transport)
+
+    def _handle_data_packet(self, packet):
+        ''' Processes data packets by using the routing table to look up
+            the port to forward the packet to the appropriate destination
+        '''
+        #get destination address from packet
+        dst_addr = packet.dest
+        #look up outbound link using the routing table
+        transport = self.route(dst_addr)
+        #tranmit packet
+        self.transmit(packet, transport)
+
+
+    # TODO
+    #   1.  repeat bellman ford at given frequency
+    #   2.  on startup, reset update_table (add hosts last, so when
+    #       called routers are fully connected)
+    #   3.  determine when to replace 
