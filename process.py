@@ -13,9 +13,229 @@ import collections
 
 import resources
 
-PACKETSIZE = 8192
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+class TCPReno:
+    """SimPy process representing the flow control using TCP reno.
+
+    TCP reno multiplicative increases the flow window size at the 
+    acknowledgement of each packet: slow start phase. When we drop 
+    packets or reach a threshold, we drop the window down to half its
+    current size and enter the congestion avoidance phase. 
+
+    :param: Flow flow: the flow that is using TCP reno
+    """
+    def __init__(self, flow, window, timeout):
+        # The flow running this TCP algorithm
+        self._flow = flow
+        # window size (bits)
+        self._window = window
+        # Length of time we wait before packets are considered dropped
+        self._timeout = timeout
+
+        # Start the packet generator
+        self._gen = self._flow._generator()
+
+
+    @property
+    def window(self):
+        """Transmission window size, in bits.
+        :return: window size (bits)
+        :rtype: int
+        """
+        return self._window
+
+    @property
+    def timeout(self):
+        """The time after which packets are considered dropped.
+        :return: acknowledgement timeout (simulation time)
+        :rtype: int
+        """
+        return self._time
+
+    def _next_packet(self):
+        logger.info(
+            "flow {}, {} sending packet {} at time {}".format(
+                self._flow._id, self._flow._host.addr, self._flow._sent, 
+                self._flow._env.now))
+        # Generate the next packet to send
+        packet = next(self._flow._packets)
+        # Increment the count of generated packets
+        self._flow._sent += 1
+        # Increment the counter for data sent in this window
+        self._flow._window2_sent += resources.Packet.size
+        # Add the packet to the map of unacknowedged packets
+        self._flow._outbound[packet.id] = packet
+        # Send the packet through the connected host
+        yield self._flow._env.process(self._flow._host.receive(packet))
+
+    def generate(self):
+        """Generate and transmit outbound data packets.
+
+        This process has an underlying generator which yields the number
+        of packets required to transmit all the data.  The process then
+        passivates until the acknowledgement of those packets reactivates
+        it.
+
+        :return: None
+        """
+        # Yield initial delay
+        yield self._flow._env.timeout(self._flow._delay)
+
+        # Send all the packets
+        while True:
+            try:
+                # Send as many packets as fit in our window
+                while self._flow._window_sent < self._flow._window:
+                    logger.info(
+                        "+++++++ flow {}, {} sending packet {} at time {}".format(
+                            self._flow._id, self._flow._host.addr, self._flow._sent, 
+                            self._flow._env.now))
+                    # Generate the next packet to send
+                    packet = next(self._flow._packets)
+                    # Increment the count of generated packets
+                    self._flow._sent += 1
+                    # Increment the counter for data sent in this window
+                    self._flow._window_sent += resources.Packet.size
+                    # Add the packet to the map of unacknowedged packets
+                    self._flow._outbound[packet.id] = packet
+                    # Send the packet through the connected host
+                    yield self._env.process(self._host.receive(packet))
+                # Passivate packet generation
+                yield self._wait_for_ack
+                # On reactivation, reset data counter for new window
+                self._flow._window_sent = self._flow._window2_sent
+                self._flow._window2_sent = 0
+            except StopIteration:
+                # Stop trying to send packets once we run out
+                break
+        # Wait for the packets in the last window
+        yield self._flow._wait_for_ack
+        logger.info("flow {}, {} finished transmitting".format(self._flow._host.addr,
+                                                               self._flow._id))
+
+    def acknowledge(self, ack):
+        """Receive an acknowledgement packet.
+
+        If an acknowledgement is received from a packet in the previous
+        window, this generator waits <timeout> units of simulation time
+        until declaring any unacknowedged packets dropped, and
+        retransmitting them.  Once finished transmitting any dropped
+        packets, packet generation is reactivated.  If an acknowledgement
+        is received from a retransmitted packet (i.e., outside the
+        previous window), it is marked as acknowledged, but does not
+        trigger a timeout or packet generation.
+
+        :param ack: acknowledgement packet
+        :type ack: :class:`resources.ACK`
+        :return: None
+        """
+        logger.info("flow {}, {} acknowledges packet {} at time {}".format(
+            self._flow._id, self._flow._host.addr, ack.id, self._flow._env.now))
+
+        # Dropped Packet detection method #1: duplcate ACKS
+        self._detect_duplicate(ack)
+        # For an acknowledgement received, react with tcp reno
+        self._next_packet()
+        yield self._flow._env.process(self._tcp_reno(ack))
+
+        # if the ACK packet is not from a retransmitted packet
+        if ack.id >= self._flow._sent - self._flow._window:
+            # Continue sending more packets
+            self._flow._wait_for_ack.succeed()
+            self._flow._wait_for_ack = self._flow._env.event()
+    
+    def _wait_timeout(self):
+        """ Wait for timeout time for acknowledgement packets
+
+        When a flow completes sending packets of the current window
+        and there are packets that have not been acknowledged, 
+        :return: None
+        """
+        # Packet Loss Detection #1: Timeout
+        # if we sent enough packets to fill the current window
+        # and we have outstanding packets that have not been acknowledged yet
+        while self._flow._window_sent >= self._flow._window and len(self._outbound) != 0:
+            logger.info("Waiting for timeout at time {}".format(self._env.now))
+            # wait for timeout time to see that we receive the ACK
+            try:
+                yield self._flow._env.timeout(self._timeout)
+                # we've timed out, so half the window size
+                self._flow._window /= 2
+                # TODO: call fast recovery
+                # break out of while loop
+                break
+            except simpy.Interrupt: # condition (len(_outbound) == 0)
+                # when we receive an interrupt, we stop waiting
+                return
+
+    def _detect_duplicate(self, ack):
+        """ Keeps track of duplicate acknowledgements for TCP reno
+
+        If the id of the acknowledgement packet is that of a packet
+        that we have not yet acknowledged, remove from the outbound dict.
+        If not, the id will not be in the dict, and thus is a duplicate id.
+        Increment the duplicate counter 
+        """
+        # Acknowledge the packet whose ACK was received
+        if ack.id in self._flow._outbound.keys():
+            del self._flow._outbound[ack.id]
+            self._flow._dupCount = 0
+        else:
+            logger.info("We have a duplicate of id {}".format(ack.id))
+            self._flow._dupCount += 1
+       
+        if self._flow._dupCount == 3:
+            logger.info("Received 3 duplicate ACKS of id {} at time {}".format(
+                ack.id, self._flow._env.now))
+            self._flow._window /= 2
+
+    def _tcp_reno(self, ack):
+        """ 
+        Use TCP reno as the congestion control for this flow
+        For every acknowledgement packet received, increase the window size
+        by 8192 (the size of a packet in bits) if we are in the slow start
+        state. If our window size is greater than the slow start threshold
+        enter the congestion avoidance state, where we increase the window
+        size by 1/(window size). 
+        :param ack: acknowledgement packet
+        :type ack: class: 'resources.ACK'
+        :return: None
+        """
+
+        logger.info("tcp called")
+        
+        self._detect_duplicate(ack)
+
+        # if the flow is in slow start phase
+        if self._flow._state == 0:
+            # increase window size exponentially
+            self._flow._window += resources.Packet.size
+            # enter congestion avoidance if we have reached the ss threshold
+            if self._flow._window >= self._flow._ssthresh:
+                self._flow._state = 1
+        # if the flow is in congestion avoidance phase
+        else:
+            # increase the window size linearly
+            self._flow._window += resources.Packet.size/self._window
+
+        logger.info("flow {}, window size increases to {} at time {}".format(
+            self._flow._id, self._window, self._flow._env.now)) 
+       
+        # Packet Loss Detection #1: Timeout
+        timeoutprocess = self._flow._env.process(self._wait_timeout())
+        yield timeoutprocess
+        # TODO: timeoutprocess.interrupt()
+
+    def run(self):
+        """ Run TCP reno & send data
+
+        :return: None
+        """
+        # Start
+        proc = self._flow._env.process(self._tcp_reno())
+        yield self.generate()
 
 class Flow(object):
     """SimPy process representing a flow.
@@ -137,23 +357,6 @@ class Flow(object):
 
         return g
 
-    def _next_packet(self):
-        logger.info(
-            "flow {}, {} sending packet {} at time {}".format(
-                self._id, self._host.addr, self._sent, 
-                self._env.now))
-        # Generate the next packet to send
-        packet = next(self._packets)
-        # Increment the count of generated packets
-        self._sent += 1
-        # Increment the counter for data sent in this window
-        self._window2_sent += packet.size
-        # Add the packet to the map of unacknowedged packets
-        self._outbound[packet.id] = packet
-        # Send the packet through the connected host
-        yield self._env.process(self._host.receive(packet))
-
-
     def generate(self):
         """Generate and transmit outbound data packets.
 
@@ -173,7 +376,7 @@ class Flow(object):
                 # Send as many packets as fit in our window
                 while self._window_sent < self._window:
                     logger.info(
-                        "+++++++ flow {}, {} sending packet {} at time {}".format(
+                        "flow {}, {} sending packet {} at time {}".format(
                             self._id, self._host.addr, self._sent, 
                             self._env.now))
                     # Generate the next packet to send
@@ -189,8 +392,7 @@ class Flow(object):
                 # Passivate packet generation
                 yield self._wait_for_ack
                 # On reactivation, reset data counter for new window
-                self._window_sent = self._window2_sent
-                self._window2_sent = 0
+                self._window_sent = 0
             except StopIteration:
                 # Stop trying to send packets once we run out
                 break
@@ -221,98 +423,15 @@ class Flow(object):
         # Acknowledge the packet whose ACK was received
         del self._outbound[ack.id]
 
-        # For an acknowledgement received, react with tcp reno
-        self._next_packet()
-        yield self._env.process(self._tcp_reno(ack))
+        # call the TCP we want this flow to use
+        renoobj = TCPReno(self, self._window, self._time)
+        yield self._env.process(renoobj.acknowledge(ack))
 
         # if the ACK packet is not from a retransmitted packet
         if ack.id >= self._sent - self._window:
             # Continue sending more packets
             self._wait_for_ack.succeed()
             self._wait_for_ack = self._env.event()
-    
-    def _wait_timeout(self):
-        """ Wait for timeout time for acknowledgement packets
-
-        When a flow completes sending packets of the current window
-        and there are packets that have not been acknowledged, 
-        :return: None
-        """
-        # Packet Loss Detection #1: Timeout
-        # if we sent enough packets to fill the current window
-        # and we have outstanding packets that have not been acknowledged yet
-        while self._window_sent >= self._window and len(self._outbound) != 0:
-            logger.info("Waiting for timeout at time {}".format(self._env.now))
-            # wait for timeout time to see that we receive the ACK
-            try:
-                yield self._env.timeout(self._time)
-                # we've timed out, so half the window size
-                self._window /= 2
-                # TODO: call fast recovery
-                # break out of while loop
-                break
-            except simpy.Interrupt: # condition (len(_outbound) == 0)
-                # when we receive an interrupt, we stop waiting
-                return
-
-    def _tcp_dupACK(self, ack):
-        """ Keeps track of duplicate acknowledgements for TCP reno
-
-        If the id of the acknowledgement packet is that of a packet
-        that we have not yet acknowledged, remove from the outbound dict.
-        If not, the id will not be in the dict, and thus is a duplicate id.
-        Increment the duplicate counter 
-        """
-        # Acknowledge the packet whose ACK was received
-        if ack.id in self._outbound.keys():
-            del self._outbound[ack.id]
-            self._dupCount = 0
-        else:
-            logger.info("************* We have a duplicate of id {}".format(ack.id))
-            self._dupCount += 1
-       
-        if self._dupCount == 3:
-            logger.info("Received 3 duplicate ACKS of id {} at time {}".format(
-                ack.id, self._env.now))
-            self._window /= 2
-
-    def _tcp_reno(self, ack):
-        """ 
-        Use TCP reno as the congestion control for this flow
-        For every acknowledgement packet received, increase the window size
-        by 8192 (the size of a packet in bits) if we are in the slow start
-        state. If our window size is greater than the slow start threshold
-        enter the congestion avoidance state, where we increase the window
-        size by 1/(window size). 
-        :param ack: acknowledgement packet
-        :type ack: class: 'resources.ACK'
-        :return: None
-        """
-
-        logger.info("tcp called")
-        
-        self._tcp_dupACK(ack)
-
-        # if the flow is in slow start phase
-        if self._state == 0:
-            # increase window size exponentially
-            self._window += resources.Packet.size
-            # enter congestion avoidance if we have reached the ss threshold
-            if self._window >= self._ssthresh:
-                self._state = 1
-        # if the flow is in congestion avoidance phase
-        else:
-            # increase the window size linearly
-            self._window += resources.Packet.size/self._window
-
-        logger.info("flow {}, window size increases to {} at time {}".format(
-            self._id, self._window, self._env.now)) 
-       
-        # Packet Loss Detection #1: Timeout
-        timeoutprocess = self._env.process(self._wait_timeout())
-        yield timeoutprocess
-        # TODO: timeoutprocess.interrupt()
-
 
 class Host(object):
     """SimPy process representing a host.
@@ -429,7 +548,6 @@ class Host(object):
         """
         self._flows.append(flow)
         return len(self._flows) - 1
-
 
 class Link(object):
     """SimPy process representing a link.
