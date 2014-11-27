@@ -131,9 +131,7 @@ class TCPReno:
         :type ack: :class:`resources.ACK`
         :return: None
         """
-        logger.info("flow {}, {} acknowledges packet {} at time {}".format(
-            self._flow._id, self._flow._host.addr, ack.id, self._flow._env.now))
-
+        
         # Dropped Packet detection method #1: duplcate ACKS
         self._detect_duplicate(ack)
         # For an acknowledgement received, react with tcp reno
@@ -156,8 +154,8 @@ class TCPReno:
         # Packet Loss Detection #1: Timeout
         # if we sent enough packets to fill the current window
         # and we have outstanding packets that have not been acknowledged yet
-        while self._flow._window_sent >= self._flow._window and len(self._outbound) != 0:
-            logger.info("Waiting for timeout at time {}".format(self._env.now))
+        while self._flow._window_sent >= self._flow._window and len(self._flow._outbound) != 0:
+            logger.info("Waiting for timeout at time {}".format(self._flow._env.now))
             # wait for timeout time to see that we receive the ACK
             try:
                 yield self._flow._env.timeout(self._timeout)
