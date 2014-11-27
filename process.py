@@ -762,7 +762,7 @@ class Router(object):
         # first determine what type of packet it is, then process it 
         if type(packet) == Routing_Packet:
             self._handle_routing_packet(packet)
-        else
+        else:
             self._handle_data_packet(packet)
 
         # Transmit each packet on all ports
@@ -813,7 +813,7 @@ class Router(object):
             # don't send routing packets to hosts or to the router
             # that sent the recently received packet.
             neighbor_type = transport.link.endpoints
-            if HostResource in map(type, transport.link.endpoints) ||
+            if HostResource in map(type, transport.link.endpoints) or \
                     transport == port:
                 continue
 

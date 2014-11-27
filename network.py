@@ -9,6 +9,7 @@ import simpy
 
 import gui
 import process
+import test
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -141,4 +142,4 @@ class Network(object):
         # Run the simulation
         self.env.run(until=until_)
         # Reset the environment
-        self.env = simpy.Environment()
+        self.env = test.MonitoredEnvironment()

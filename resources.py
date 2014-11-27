@@ -133,17 +133,17 @@ class ACK(Packet):
 
 
 class RoutingPacket(Packet):
-	"""This class represents a routing packet.
+    """This class represents a routing packet.
 
-	:param int pid: packet id
+    :param int pid: packet id
     :param object payload: packet payload
-	"""	
+    """    
 
-	# Simulated routing packet size (bits)
-	size = 512
-	"""Packet size (bits)"""
+    # Simulated routing packet size (bits)
+    size = 512
+    """Packet size (bits)"""
 
-	def __init__(self, pid, payload):
+    def __init__(self, pid, payload):
         # Packet source address
         self._src = None
         # Packet destination address
