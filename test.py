@@ -4,6 +4,7 @@
     :synopsis: Test cases & monitoring for the network simulator.
 """
 
+import heapq
 import simpy
 
 ZERO = ([(('h0', 'h1'), (80000000, 512000, 10))], 
@@ -66,8 +67,8 @@ class MonitoredEnvironment(simpy.Environment):
         """Update all monitored values."""
         # For each identifier
         for name, getter in self._getters.keys():
-            # Update the monitored values with the result of its getter 
-            self._monitored[name].append(getter())
+            # Append a new timestamped value to the list 
+            self._monitored[name].append((self._now, getter()))
 
     def register(self, name, getter):
         """Register a new identifier.
@@ -87,24 +88,26 @@ class MonitoredEnvironment(simpy.Environment):
     def step(self):
         """Process the next event, and update the monitored values.
 
-        Raise an :exc:`simpy.EmptySchedule` if no further events are available.
+        Raise an :exc:`simpy.core.EmptySchedule` if no further events
+        are available.
 
         """
         try:
-            self._now, _, _, event = heappop(self._queue)
+            self._now, _, _, event = heapq.heappop(self._queue)
         except IndexError:
-            raise simpy.EmptySchedule()
+            raise simpy.core.EmptySchedule()
 
         # Process callbacks of the event.
         for callback in event.callbacks:
             callback(event)
         event.callbacks = None
 
-        # Update the monitored values
-        self._update()
+        # If the next event is in the future, or nonexistent 
+        if self.peek() > self._now:
+            # Update the monitored values
+            self._update()
 
-        if not event.ok and not hasattr(event, 'defused'):
+        if not event.ok and not hasattr(event, "defused"):
             # The event has failed, check if it is defused.
             # Raise the value if not.
             raise event._value
-
