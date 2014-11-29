@@ -43,7 +43,7 @@ class Network(object):
 
     def __init__(self, adjacent=None):
         # Simulation environment
-        self.env = simpy.Environment()
+        self.env = test.MonitoredEnvironment()
         # Table of hosts in this network
         self._hosts = dict()
         # Table of routers in this network
@@ -134,12 +134,17 @@ class Network(object):
     def simulate(self, until_=None):
         """Run the initialized simulation.
 
-        :param int until_: The time to run the simulation until
-        :return: None
+        :param int until_: time to run the simulation until
+        :return: all monitored values
+        :rtype: dict
         """
         # Initialize packet generating processes for each flow
         processes = [self.env.process(f.generate()) for f in self._flows]
         # Run the simulation
         self.env.run(until=until_)
+        # Retrieve monitored values
+        values = self.env.monitored
         # Reset the environment
         self.env = test.MonitoredEnvironment()
+
+        return values

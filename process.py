@@ -278,8 +278,6 @@ class Flow(object):
     :param list tcp_params: parameters for the TCP algorithm
     """
 
-    # TODO: update Flow docstring
-
     allowed_tcp = {"FAST": FAST}
     """A dict mapping TCP specifiers to implementations (classes)."""
 
