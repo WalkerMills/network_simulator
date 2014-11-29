@@ -710,6 +710,16 @@ class Router(object):
         # Dictionary mapping outbound links to destinations (used to build
         # a new routing table before replacing old table)
         self._update_table = dict()
+        # Arrival time of most recently processed routing packet
+        self._last_arrival = float('inf')
+        # Dictionary of links to other routers 
+        self._finish_table = dict()
+        # Flag indicating if router has converged
+        self._converged = False
+        # timeout duration used to set frequency of routing table updates
+        self._timeout = 5000 #every 5s
+
+
 
     @property
     def addr(self):
@@ -746,6 +756,28 @@ class Router(object):
             # If it doesn't exist, do nothing
             pass
 
+    def _route(self, address):
+        """Return the correct transport handler for the given address.
+
+        :param int address: the destination address
+        :return: the transport handler selected by the routing policy
+        :rtype: function
+        """
+        
+        return self._routing_table[packet._dest][0]
+
+    def transmit(self, packet, transport):
+        """Transmit an outbound packet.        
+       
+        :param packet: the outbound packet     
+        :type packet: :class:`resources.Packet`  
+        :param transport: the outbound transport handler
+        :type transport: :class:`resources.Transport`      
+        :return: None      
+        """               
+        # Send the packet      
+        yield self.res.env.process(transport.send(packet))
+
     def receive(self, packet):
         """Receive a packet, and yield a transmission event.
 
@@ -760,89 +792,124 @@ class Router(object):
         packet = yield self.res.receive(packet)
 
         # first determine what type of packet it is, then process it 
-        if type(packet) == Routing_Packet:
+        if type(packet) == Routing:
             self._handle_routing_packet(packet)
-        else:
-            self._handle_data_packet(packet)
+
+        else: #handle data packet
+            #get destination address from packet
+            dst_addr = packet.dest
+            #look up outbound link using the routing table
+            transport = self.route(dst_addr)
+            #tranmit packet
+            yield self.res.env.process(self.transmit(packet, transport))
 
         # Transmit each packet on all ports
-        for packet in packets:
+        #for packet in packets:
             # Transmit the dequeued packet
             yield self.res.env.process(self.transmit(packet))
 
-    def _route(self, address):
-        """Return the correct transport handler for the given address.
-
-        :param int address: the destination address
-        :return: the transport handler selected by the routing policy
-        :rtype: function
-        """
-        
-        return self._routing_table[packet._dest][0]
-
-    def transmit(self, packet, transport):     
-        """Transmit an outbound packet.        
-       
-        :param packet: the outbound packet     
-        :type packet: :class:`resources.Packet`  
-        :param transport: the outbound transport handler
-        :type transport: :class:`resources.Transport`      
-        :return: None      
-        """               
-        # Send the packet      
-        yield self.res.env.process(transport.send(packet))
-
     def _handle_routing_packet(self, event):
 
-        host, cost, path, port = event.packet.data
-
-        # check if router_id is already in path
-        for i in len(path):
+        if type(packet) == Finish:
+            # retrieve trasnport object connecting routers
+            transport = event.packet.data
+            # and update the link table to indicate the router on
+            # other side of link has converged
+            self._finish_table[transport] = True
+        # if it's a normal routing packet
+        else: 
+            # extract data from payload
+            host, cost, path, port = event.packet.data
+            # update last arrival time of packet
+            self._last_arrival = self.env._now
             # if packet has already gone through router, ignore it
-            if path[i] == self._id:
+            if self._id in path:
                 return                
 
-        # update new routing table
-        if (self._update_table[host][1] >= cost):
-            self._update_table[host] = (port, cost)
+            # update new routing table
+            if self._update_table[host][1] > cost:
+                self._update_table[host] = (port, cost)
 
+                # create a new routing packet for each outbound link that's
+                # not a host and adjust the cost for each link
+                for transport in self._links:
+                    # don't send routing packets to hosts or to the router
+                    # that sent the recently received packet.
+                    if Host in map(type, transport.link.endpoints) or \
+                            transport == port:
+                        continue
 
-        # create a new routing packet for each outbound link that's
-        # not a host and adjust the cost for each link
-        for transport in self._links:
-            # don't send routing packets to hosts or to the router
-            # that sent the recently received packet.
-            neighbor_type = transport.link.endpoints
-            if HostResource in map(type, transport.link.endpoints) or \
-                    transport == port:
-                continue
+                    # update packet path and cost
+                    new_path = path.append(self._id)
+                    new_cost = cost + transport.cost
+                    # create reference to outbound port for this router on the 
+                    # router receiving the packet 
+                    new_link_ref = transport.reverse()
+                    # create new packet
+                    new_pkt = Routing((host, new_cost, new_path, new_link_ref))
+                    # send the newly created packet
+                    yield self.res.env.process(self.transmit(new_pkt, transport))
 
-            # update packet path and cost
-            new_path = path.append(self._id) ##do outside loop
-            new_cost = cost + transport.cost
-            # create reference to outbound port for this router on the 
-            # router receiving the packet 
-            new_link_ref = transport.reverse()
-            # create new packet
-            new_pkt = RoutingPacket(packet.pid, 
-                (host, new_cost, new_path, new_link_ref))
-            # send the newly created packet
-            self.transmit(new_pkt, transport)
+            # after receiving a routing packet,
+            yield self.env.timeout(self._timeout)
+            # check to see if router has reached threshold (for the first time)
+            if self.env._now > self._last_arrival + self._timeout and \
+                not self._converged:
+                # set flag
+                self._converged = True
+                for transport in self._links:
+                    #create reference to outbound port for this router 
+                    #on the router recieving the packet
+                    transport_ref = transport.reverse()
+                    new_pkt = Finish(pid, transport_ref)
+                    yield self.res.env.process(self.transmit(new_pkt, transport))
 
-    def _handle_data_packet(self, packet):
-        ''' Processes data packets by using the routing table to look up
-            the port to forward the packet to the appropriate destination
-        '''
-        #get destination address from packet
-        dst_addr = packet.dest
-        #look up outbound link using the routing table
-        transport = self.route(dst_addr)
-        #tranmit packet
-        self.transmit(packet, transport)
+        # check for one degree of convergence (this router and neighbors)
+        if self._converged and all(self._finish_table.values()):
+            for key in self._finish_table:
+                if not(self._finish_table[key]):
+                    return
+            # self and all neighbors have converged so swap table
+            self._routing_table = copy.deepcopy(self._update_table)
+            # and reset all variables used for tracking convergence
+            self._last_arrvial = float('inf')
+            self._converged = False
+            self._finish_table = {k: False for k in self._finish_table.keys()}
 
+    def begin_routing_update(self):
+        """Periodically update routing tables with Bellman-Ford
 
-    # TODO
-    #   1.  repeat bellman ford at given frequency
-    #   2.  on startup, reset update_table (add hosts last, so when
+        :return: None
+        """
+        try:
+            while True:
+                # loop through all outbound links
+                for transport in self._links:
+                    # check for any direct connections to hosts
+                    #filter(lambda t: t == Router, self._links)
+                    if Host in map(type, transport.link.endpoints):
+                        new_path = [self._id]
+                        new_cost = transport.cost
+                        for t in filter(lambda t: t == Router, self._links):
+                            new_link_ref = t.reverse()
+                            new_cost += t.cost
+                            new_pkt = Routing((host, new_cost, new_path,
+                                               new_link_ref))
+                            yield self.res.env.process(self.transmit(new_pkt, 
+                                                                     t))
+                yield self.env.timeout(self._timeout)
+        except simpy.events.Interrupt:
+            pass
+
+    # TODO:
+    #   1.  on startup, reset update_table (add hosts last, so when
     #       called routers are fully connected)
-    #   3.  determine when to replace 
+    #   2.  determine when to replace (implement threshold function)
+
+    # add update flag for router / table for neighboring routers
+    # call function whenever a pcket is received from another router indicating
+    # they've reached threshold OR when this router has received threshold
+    # at the end of the function, checks for flag set and neighbors flags
+    # if all are set, swap routing tables and reset all variables
+    #**check that routing table has as many entries as hosts && #nonupdates
+    #**how necessary is 

@@ -132,10 +132,9 @@ class ACK(Packet):
         self._data = expected
 
 
-class RoutingPacket(Packet):
+class Routing(Packet):
     """This class represents a routing packet.
 
-    :param int pid: packet id
     :param object payload: packet payload
     """    
 
@@ -143,7 +142,7 @@ class RoutingPacket(Packet):
     size = 512
     """Packet size (bits)"""
 
-    def __init__(self, pid, payload):
+    def __init__(self, payload):
         # Packet source address
         self._src = None
         # Packet destination address
@@ -151,9 +150,17 @@ class RoutingPacket(Packet):
         # Flow ID on the source host
         self._flow = None
         # Packet ID
-        self._id = pid
+        self._id = None
         # Packet data
         self._data = payload
+
+
+class Finish(Routing):
+    """This class represents a packet used to communicate the
+    	end conditions for dynamic routing
+
+    :param object payload: packet payload
+    """    
 
 
 class LinkTransport(simpy.events.Event):
