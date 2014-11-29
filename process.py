@@ -527,7 +527,7 @@ class Flow(object):
     :param list tcp_params: parameters for the TCP algorithm
     """
 
-    allowed_tcp = {"FAST": FAST, "Reno", Reno}
+    allowed_tcp = {"FAST": FAST, "Reno": Reno}
     """A dict mapping TCP specifiers to implementations (classes)."""
 
     def __init__(self, env, host, dest, data, delay, tcp, tcp_params):

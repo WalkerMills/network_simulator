@@ -37,8 +37,8 @@ class Network(object):
     algorithms.
 
     :param adjacent: adjacency lists of links & flows defining a network
-    :type adjacent`: ([((str, str), (int, int, int))], 
-                      [((str, str), ((int, int), (str, list)))])
+    :type adjacent: ([((str, str), (int, int, int))], 
+                     [((str, str), ((int, int), (str, list)))])
     """
 
     def __init__(self, adjacent=None):
@@ -57,6 +57,10 @@ class Network(object):
         if adjacent is None:
             # Get edges & flows from GUI input
             adjacent = gui.draw()
+        # Alternatively, if a test case was specified
+        elif isinstance(adjacent, test.Case):
+            # Build the corresponding adjacency list
+            adjacent = test.TestCase.adjacent(adjacent)
         # Populate the network
         self._build_network(*adjacent)
 
@@ -94,9 +98,8 @@ class Network(object):
             link = process.Link(self.env, *parameters)
             # Initialize a list of endpoints
             endpoints = list()
-
+            # Logger parameters
             log_args = list()
-
             # Add an endpoint for each tag 
             for tag in tags:
                 # Retrieve the address from this tag
