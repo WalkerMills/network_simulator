@@ -85,6 +85,16 @@ class Packet(object):
         """
         return self._id
 
+    # @id.setter
+    def set_id(self, value):
+        """Sets this packet's ID to a new value
+
+        :param function value: new value of the ID
+        :return: None
+        """
+        logger.info("setter called")
+        self._id = value
+
     @property
     def data(self):
         """Return this packet's payload of data.
@@ -96,6 +106,8 @@ class Packet(object):
 
     def acknowledge(self, expected):
         """Generate an acknowledgement for this packet.
+        Packets return an id based on the next packet id expected 
+        by the host.
 
         :param int expected: the next packet id expected (ACK payload)
         :return: an acknowledgement packet matching this packet
@@ -467,11 +479,3 @@ class HostResource(PacketQueue):
         else:
             # Return the packet popped from the queue
             event.succeed(event.packet)
-
-    def _begin_bellman_ford(self, host_id):
-        '''Called by the network process. Begins the process of updating '''
-
-        #outline:
-        #the network class calls this function it begins the routing update
-        #process by creating a routing packet with the host_id and the cost
-        #of the link connecting it to a host

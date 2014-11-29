@@ -10,6 +10,7 @@ import math
 import queue
 import random
 import simpy
+import collections
 
 from collections import deque
 
@@ -17,6 +18,254 @@ import resources
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+class Reno(object):
+    """SimPy process representing the flow control using TCP Reno.
+
+    TCP Reno multiplicative increases the flow window size at the 
+    acknowledgement of each packet: slow start phase. When we drop 
+    packets or reach a threshold, we drop the window down to half its
+    current size and enter the congestion avoidance phase. 
+
+    :param flow: the flow that is using TCP Reno
+    :type flow: :class:`Flow`
+    :param int window: initial window size (in packets)
+    :param int timeout: packet acknowledgement timeout
+    """
+    def __init__(self, flow, window, timeout):
+        # The flow running this TCP algorithm
+        self._flow = flow
+        # window size (bits)
+        self._window = window
+        # Length of time we wait before packets are considered dropped
+        self._timeout = timeout
+        # Slow start threshold
+        self._slow_start = 1
+        # Start the packet generator
+        self._gen = self._flow._generator()
+        # Mapping of unacknowledged packet id -> packet
+        self._flow._outbound = dict()
+         # Hash table mapping unacknowledged packet -> departure time
+        self._unacknowledged = dict()
+
+    @property
+    def window(self):
+        """Transmission window size, in bits.
+        :return: window size (bits)
+        :rtype: int
+        """
+        return self._window
+
+    @property
+    def timeout(self):
+        """The time after which packets are considered dropped.
+        :return: acknowledgement timeout (simulation time)
+        :rtype: int
+        """
+        return self._time
+
+    def _next_packet(self):
+        logger.info(
+            "flow {}, {} sending packet {} at time {}".format(
+                self._flow._id, self._flow._host.addr, self._flow._sent, 
+                self._flow._env.now))
+        # Generate the next packet to send
+        packet = next(self._flow._packets)
+        # Increment the count of generated packets
+        self._flow._sent += 1
+        # Increment the counter for data sent in this window
+        self._flow._window2_sent += resources.Packet.size
+        # Add the packet to the map of unacknowedged packets
+        self._flow._outbound[packet.id] = packet
+        # Send the packet through the connected host
+        yield self._flow._env.process(self._flow._host.receive(packet))
+
+    def generate(self):
+        """Generate and transmit outbound data packets.
+
+        This process has an underlying generator which yields the number
+        of packets required to transmit all the data.  The process then
+        passivates until the acknowledgement of those packets reactivates
+        it.
+
+        :return: None
+        """
+        # Yield initial delay
+        yield self._flow._env.timeout(self._flow._delay)
+        # Counter for the number of completed windows
+        window_count = 0
+        # Send all the packets
+        while True:
+            try:
+                # Send as many packets as fit in our window
+                while self._flow._window_sent < self._flow._window:
+                    logger.info(
+                        "flow {}, {} sending packet {} at time {}".format(
+                            self._flow._id, self._flow._host.addr,
+                            self._flow._sent, self._flow._env.now))
+                    # Generate the next packet to send
+                    packet = next(self._flow._packets)
+                    # Increment the count of generated packets
+                    self._flow._sent += 1
+                    # Increment the counter for data sent in this window
+                    self._flow._window_sent += resources.Packet.size
+                    # Add the packet to the map of unacknowedged packets
+                    self._flow._outbound[packet.id] = packet
+                    # Transmit Packet
+                    yield self._flow._env.process(self._flow.transmit(packet))
+                # Passivate packet generation
+                yield self._flow._wait_for_ack
+
+                logger.info(
+                        "Finished acknowledging window {} at time {}".format(
+                            window_count, self._flow._env.now))
+
+                # On acknowledgements we send the corresponding packet of
+                # next window, call by the acknowledge function. Once we have
+                # Transmitted all packets in our window we switch to the next 
+                # and resume sending packets.
+
+                # On reactivation, reset data counter for new window
+                self._flow._window_sent = self._flow._window2_sent
+                self._flow._window2_sent = 0
+                window_count += 1
+            except StopIteration:
+                # Stop trying to send packets once we run out
+                break
+        # Wait for the packets in the last window
+        yield self._flow._wait_for_ack
+        logger.info("flow {}, {} finished transmitting"
+                    "".format(self._flow._host.addr, self._flow._id))
+
+    def retransmit(self):
+        """Retransmit all unacknowedged packets.
+
+        Called when we experience a timeout or have three duplicate
+        acknowledgements.
+        """
+        for packet in self._flow._outbound:
+            logger.info(
+                "flow {}, {} retransmit packet {} at time {}".format(
+                    self._flow._id, self._flow._host.addr, packet.id, 
+                    self._flow._env.now))
+            # Transmit Packet
+            yield self._flow.env.process(self._flow.transmit(packet))
+        # Passivate packet generation
+        yield self._wait_for_ack
+
+    def acknowledge(self, ack):
+        """Receive an acknowledgement packet.
+
+        If an acknowledgement is received from a packet in the previous
+        window, this generator waits <timeout> units of simulation time
+        until declaring any unacknowedged packets dropped, and
+        retransmitting them.  Once finished transmitting any dropped
+        packets, packet generation is reactivated.  If an acknowledgement
+        is received from a retransmitted packet (i.e., outside the
+        previous window), it is marked as acknowledged, but does not
+        trigger a timeout or packet generation.
+
+        :param ack: acknowledgement packet
+        :type ack: :class:`resources.ACK`
+        :return: None
+        """
+        
+        # store ID of packet being acknowledged
+        pid = ack.id
+        # store ID of next expected package
+        expected = ack.data
+        # For an acknowledgement received, send packet from next window
+        self._next_packet()
+        self._detect_duplicate(ack)
+        # if the flow is in slow start phase
+        if self._slow_start == 1:
+            # increase window size exponentially
+            self._flow._window += resources.Packet.size
+            # enter congestion avoidance if we have reached the ss threshold
+            if self._flow._window >= self._flow._ssthresh:
+                self._slow_start = 0
+        # if the flow is in congestion avoidance phase
+        else:
+            # increase the window size linearly
+            self._flow._window += resources.Packet.size / self._window
+        logger.info("flow {}, window size increases to {} at time {}".format(
+            self._flow._id, self._flow._window, self._flow._env.now)) 
+        # Packet Loss Detection #1: Timeout
+        timeoutprocess = self._flow._env.process(self._wait_timeout())
+        yield timeoutprocess
+        # TODO: timeoutprocess.interrupt()
+        # if the ACK packet is not from a retransmitted packet
+        if ack.id >= self._flow._sent - self._flow._window:
+            # Continue sending more packets
+            self._flow._wait_for_ack.succeed()
+            self._flow._wait_for_ack = self._flow._env.event()
+    
+    def _wait_timeout(self):
+        """Wait for timeout time for acknowledgement packets.
+
+        When a flow completes sending packets of the current window
+        and there are packets that have not been acknowledged, 
+        :return: None
+        """
+        # Packet Loss Detection #1: Timeout
+        # if we sent enough packets to fill the current window
+        # and we have outstanding packets that have not been acknowledged yet
+        while self._flow._window_sent >= self._flow._window and \
+            len(self._flow._outbound) != 0:
+            logger.info("Waiting for timeout at time "
+                        "{}".format(self._flow._env.now))
+            # wait for timeout time to see that we receive the ACK
+            try:
+                yield self._flow._env.timeout(self._timeout)
+                # we've timed out, so half the window size
+                logger.info("Flow Timeout at time "
+                            "{}".format(self._flow._env.now))
+                self._flow._window /= 2
+                # TODO: call fast recovery
+                # break out of while loop
+                break
+            except simpy.Interrupt: # condition (len(_outbound) == 0)
+                # when we receive an interrupt, we stop waiting
+                return
+
+    def _detect_duplicate(self, ack):
+        """Keeps track of duplicate acknowledgements for TCP Reno.
+
+        If the id of the acknowledgement packet is that of a packet
+        that we have not yet acknowledged, remove from the outbound dict.
+        If not, the id will not be in the dict, and thus is a duplicate id.
+        Increment the duplicate counter 
+        """
+        # Acknowledge the packet whose ACK was received
+        if ack.id in self._flow._outbound.keys() and \
+            ack.id == ack.expected - 1:
+            # Packet was successfully acknowledged when expected 
+            # was incremented by one.
+            del self._flow._outbound[ack.id]
+            self._flow._dupCount = 0
+        else:
+            # 
+            logger.info("We have a duplicate of expected id {}".format(
+                ack.expected))
+            self._flow._dupCount += 1
+       
+        if self._flow._dupCount == 3:
+            logger.info("Received 3 duplicate ACKS of expected {} at time "
+                        "{}".format(
+                ack.id, self._flow._env.now))
+            self._flow._window /= 2
+            # enter fast retransmit
+            yield self._flow.env.process(self.retransmit())
+
+    def run(self):
+        """Run TCP Reno & send data
+
+        :return: None
+        """
+        # Start
+        #proc = self._flow._env.process(self._tcp_reno())
+        yield self._flow._env.process(self.generate())
 
 
 class FAST(object):
@@ -278,7 +527,7 @@ class Flow(object):
     :param list tcp_params: parameters for the TCP algorithm
     """
 
-    allowed_tcp = {"FAST": FAST}
+    allowed_tcp = {"FAST": FAST, "Reno": Reno}
     """A dict mapping TCP specifiers to implementations (classes)."""
 
     def __init__(self, env, host, dest, data, delay, tcp, tcp_params):
@@ -351,18 +600,18 @@ class Flow(object):
 
         return g
 
-    def transmit(self, packet):
-        """Transmit an outbound packet to localhost.
-
-        :param packet: the data packet to send
-        :type packet: :class:`resources.Packet`
-        """
-        yield self.env.process(self._host.receive(packet))
-
     def generate(self):
         """Generate packets from this flow."""
         yield self.env.timeout(self._delay)
         yield self.env.process(self._tcp.run())
+
+    def transmit(self, packet):
+        """Transmit an outbound packet to localhost.
+        
+        :param packet: the data packet to send
+        :type packet: :class:`resources.Packet`
+        """
+        yield self._env.process(self._host.receive(packet))
 
     def acknowledge(self, ack):
         """Receive an acknowledgement packet.
@@ -718,6 +967,7 @@ class Router(object):
         self._timeout = 50 #every 0.1s
         # timeout duration used to set frequency of routing table updates
         self._bf_period = 5000 #every 5s
+
 
     @property
     def addr(self):

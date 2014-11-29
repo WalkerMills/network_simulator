@@ -11,8 +11,6 @@ import tkinter
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# TODO: add TCP specification to FlowDialog
-
 
 class Dialog(tkinter.Toplevel):
     """Abstract base class for constructing dialog boxes.
