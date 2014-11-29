@@ -30,18 +30,23 @@ class Network(object):
     only host tags are allowed.  Link arguments are all in bits/bps, as
     is the data parameter for flows.  Delay is given in simulation time.
     The tcp parameter is a string which determines which TCP algorithm to
-    use; accepted values are currently \"FAST\".  The tcp_param parameter
-    is a list containing the arguments for initializing the TCP object,
-    and will change depending on the TCP algorithm specified.  See
-    :mod:`process` for details of the currently implemented TCP
-    algorithms.
+    use; see :data:`process.Flow.allowed_tcp` for accepted TCP specifiers.
+    The tcp_param parameter is a list containing the arguments for
+    initializing the TCP object, and will change depending on the TCP
+    algorithm specified.  See :mod:`process` for details of the currently
+    implemented TCP algorithms.  Alternatively, adjacent may be a test
+    case, as defined by the enumerated type :class:`test.Case`.  If so,
+    the ``tcp`` parameter may be a (valid) TCP specifier, used for all
+    flows in the given test case.
 
     :param adjacent: adjacency lists of links & flows defining a network
     :type adjacent: ([((str, str), (int, int, int))], 
-                     [((str, str), ((int, int), (str, list)))])
+                     [((str, str), ((int, int), (str, list)))]), or
+                    :class:`test.Case`
+    :param str tcp: TCP specifier. Used iff adjacent is a :class:`test.Case`
     """
 
-    def __init__(self, adjacent=None):
+    def __init__(self, adjacent=None, tcp='FAST'):
         # Simulation environment
         self.env = test.MonitoredEnvironment()
         # Table of hosts in this network
@@ -60,7 +65,7 @@ class Network(object):
         # Alternatively, if a test case was specified
         elif isinstance(adjacent, test.Case):
             # Build the corresponding adjacency list
-            adjacent = test.TestCase.adjacent(adjacent)
+            adjacent = test.TestCase.adjacent(adjacent, tcp)
         # Populate the network
         self._build_network(*adjacent)
 
