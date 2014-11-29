@@ -470,7 +470,7 @@ class HostResource(PacketQueue):
                     heapq.heappop(heap)
             else:
                 # Push the ID expected after this packet onto the heap
-                heapq.heappush(event.packet.id + 1)
+                heapq.heappush(heap, event.packet.id + 1)
             # Pop any ID's for packet's we've already received
             while heap[0] + 1 in heap[1:3]:
                 heapq.heappop(heap)
