@@ -85,6 +85,16 @@ class Packet(object):
         """
         return self._id
 
+    # @id.setter
+    def set_id(self, value):
+        """Sets this packet's ID to a new value
+
+        :param function value: new value of the ID
+        :return: None
+        """
+        logger.info("setter called")
+        self._id = value
+
     @property
     def data(self):
         """Return this packet's payload of data.
@@ -96,6 +106,8 @@ class Packet(object):
 
     def acknowledge(self, expected):
         """Generate an acknowledgement for this packet.
+        Packets return an id based on the next packet id expected 
+        by the host.
 
         :param int expected: the next packet id expected (ACK payload)
         :return: an acknowledgement packet matching this packet
@@ -425,9 +437,18 @@ class HostResource(PacketQueue):
     """
 
     def __init__(self, env, addr):
+<<<<<<< HEAD
         super(HostResource, self).__init__(env, addr)
         # A hash table mapping (src, flow) -> min heap of expected indices
         self._expected = dict()
+=======
+        # Adds the packet dictionary to the HostResource intialization.
+        super(HostResource, self).__init__(env, addr)
+        # dictionary that stores the next expected packet id 
+        # based on source id
+        self._packet_dict = {}
+        
+>>>>>>> 986b8829b4a0a358ae5a82fdff9e1d7a8bd2e59f
 
     def _receive(self):
         """Receive a packet, yield, and return an outbound packet."""
@@ -437,6 +458,7 @@ class HostResource(PacketQueue):
         if event.packet.dest == self.addr and event.packet.size == Packet.size:
             logger.info("host {} triggering acknowledgement for packet {}, {}"
                         " at time {}".format(self._addr, event.packet.flow,
+<<<<<<< HEAD
                                              event.packet.id, self.env.now))
             # Get the event's ID in the hash table
             flow = (event.packet.src, event.packet.flow)
@@ -464,12 +486,59 @@ class HostResource(PacketQueue):
                 heapq.heappop(heap)
             # Return an acknowledgement with the next expected ID
             event.succeed(event.packet.acknowledge(heap[0]))
+=======
+                                             event.packet.id, self._env.now))
+            
+            # Create the new acknowledgement packet
+            ack = event.packet.acknowledgement()
+            # get the packet ID and source ID
+            src = ack.dest
+
+            pid = ack.id
+            # Reassign the id based on the next expected packet id. 
+            test = self._go_back_N(pid, src)
+            ack.set_id(test)
+            # Send back an ackonwledgement packet
+            event.succeed(ack)
+>>>>>>> 986b8829b4a0a358ae5a82fdff9e1d7a8bd2e59f
         else:
             # Return the packet popped from the queue
             event.succeed(event.packet)
 
+<<<<<<< HEAD
     def _begin_bellman_ford(self, host_id):
         '''Called by the network process. Begins the process of updating '''
+=======
+    def _go_back_N(self, pid, src):
+        """Recieve a packet_id and returns the next expected packet_id
+        based on the host's packet dictionary.
+
+        :param pid: the id of the inbound packet
+        :type: int
+        :param src: the id of the packet's source
+        :type: int
+        :return new packet id:
+        :rtype: int
+        """
+
+        # Check to see if the packet is in the dictionary.
+        # If not, add to the dict, key src with value 0.
+
+        if src not in self._packet_dict:
+            self._packet_dict[src] = 0;
+
+        # Verify if the packet recieved matches the dict value.
+        # If we have a match then the host requests the next request
+        # number.
+        if self._packet_dict[src] == pid:
+            self._packet_dict[src] = pid + 1
+
+        # Return the id of the packet last correctly received
+        return self._packet_dict[src] - 1
+
+
+
+>>>>>>> 986b8829b4a0a358ae5a82fdff9e1d7a8bd2e59f
 
         #outline:
         #the network class calls this function it begins the routing update
