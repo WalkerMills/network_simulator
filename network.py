@@ -138,8 +138,11 @@ class Network(object):
         :return: all monitored values
         :rtype: dict
         """
+        # Begin routing table initialization
+        router_proc = \
+            [self.env.process(r.begin()) for r in self._routers.values()]
         # Initialize packet generating processes for each flow
-        processes = [self.env.process(f.generate()) for f in self._flows]
+        flow_proc = [self.env.process(f.generate()) for f in self._flows]
         # Run the simulation
         self.env.run(until=until_)
         # Retrieve monitored values
