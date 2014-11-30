@@ -9,9 +9,13 @@ import simpy
 
 import gui
 import process
+import test
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# TODO: calculate alpha for FAST TCP based on bottlenecks detected in the
+#       input graph
 
 
 class Network(object):
@@ -21,18 +25,30 @@ class Network(object):
     adjacency list should be formatted as [((src, dest), (capacity, buffer
     size, delay))], where src & dest are formatted as a string with a
     leading \"h\" or \"r\", specifying a host or router, followed by an
-    integer id.  Flows should be given as [((src, dest), (data, window,
-    timeout))], where src & dest are formatted as previously, but only host
-    tags are allowed.  All parameters should be specified in bits or bps.
+    integer id.  Flows should be given as [((src, dest), ((data, delay),
+    (tcp, tcp_param)))], where src & dest are formatted as previously, but
+    only host tags are allowed.  Link arguments are all in bits/bps, as
+    is the data parameter for flows.  Delay is given in simulation time.
+    The tcp parameter is a string which determines which TCP algorithm to
+    use; see :data:`process.Flow.allowed_tcp` for accepted TCP specifiers.
+    The tcp_param parameter is a list containing the arguments for
+    initializing the TCP object, and will change depending on the TCP
+    algorithm specified.  See :mod:`process` for details of the currently
+    implemented TCP algorithms.  Alternatively, adjacent may be a test
+    case, as defined by the enumerated type :class:`test.Case`.  If so,
+    the ``tcp`` parameter may be a (valid) TCP specifier, used for all
+    flows in the given test case.
 
     :param adjacent: adjacency lists of links & flows defining a network
-    :type adjacent`: ([(str, str), (int, int, int)], 
-                    [(str, str), (int, int, int)])
+    :type adjacent: ([((str, str), (int, int, int))], 
+                     [((str, str), ((int, int), (str, list)))]), or
+                    :class:`test.Case`
+    :param str tcp: TCP specifier. Used iff adjacent is a :class:`test.Case`
     """
 
-    def __init__(self, adjacent=None):
+    def __init__(self, adjacent=None, tcp='FAST'):
         # Simulation environment
-        self._env = simpy.Environment()
+        self.env = test.MonitoredEnvironment()
         # Table of hosts in this network
         self._hosts = dict()
         # Table of routers in this network
@@ -46,6 +62,10 @@ class Network(object):
         if adjacent is None:
             # Get edges & flows from GUI input
             adjacent = gui.draw()
+        # Alternatively, if a test case was specified
+        elif isinstance(adjacent, test.Case):
+            # Build the corresponding adjacency list
+            adjacent = test.TestCase.adjacent(adjacent, tcp)
         # Populate the network
         self._build_network(*adjacent)
 
@@ -70,22 +90,21 @@ class Network(object):
         for addr in hosts:
             logger.info('creating host {}'.format(addr))
             # Make a new host with the given address
-            self._hosts[addr] = process.Host(self._env, addr)
+            self._hosts[addr] = process.Host(self.env, addr)
         # For each router address
         for addr in routers:
             logger.info('creating router {}'.format(addr))
             # Make a new router with the given address
-            self._routers[addr] = process.Router(self._env, addr)
+            self._routers[addr] = process.Router(self.env, addr)
 
         # For each entry in the adjacency list
         for tags, parameters in edges:
             # Make a new link
-            link = process.Link(self._env, *parameters)
+            link = process.Link(self.env, *parameters)
             # Initialize a list of endpoints
             endpoints = list()
-
+            # Logger parameters
             log_args = list()
-
             # Add an endpoint for each tag 
             for tag in tags:
                 # Retrieve the address from this tag
@@ -109,7 +128,7 @@ class Network(object):
             self._links.append(link)
 
         # For each inputted flow
-        for (src_tag, dest_tag), parameters in flows:
+        for (src_tag, dest_tag), ((data, delay), (tcp, tcp_param)) in flows:
             # Get the source host
             src = self._hosts[int(src_tag[1])]
             # Get the destination address
@@ -117,17 +136,31 @@ class Network(object):
             logger.info('creating flow between hosts {} and {}'.format(
                 src.addr, dest))
             # Create & persist the new flow
-            self._flows.append(process.Flow(self._env, src, dest, *parameters))
+            self._flows.append(process.Flow(self.env, src, dest, data, delay,
+                                            tcp, tcp_param))
 
     def simulate(self, until_=None):
         """Run the initialized simulation.
 
-        :param int until_: The time to run the simulation until
-        :return: None
+        :param int until_: time to run the simulation until
+        :return: all monitored values
+        :rtype: dict
         """
+        # Begin routing table initialization
+        router_proc = \
+            [self.env.process(r.begin()) for r in self._routers.values()]
         # Initialize packet generating processes for each flow
-        processes = [self._env.process(f.generate()) for f in self._flows]
+        flow_proc = [self.env.process(f.generate()) for f in self._flows]
+        # If we didn't get a termination condition
+        if until_ is None:
+            # Terminate once all flows are finished transmitting data
+            until_ = simpy.events.AllOf(self.env, 
+                                        [f.finished for f in self._flows])
         # Run the simulation
-        self._env.run(until=until_)
+        self.env.run(until=until_)
+        # Retrieve monitored values
+        values = self.env.monitored()
         # Reset the environment
-        self._env = simpy.Environment()
+        self.env = test.MonitoredEnvironment()
+        # Return the monitored values
+        return values

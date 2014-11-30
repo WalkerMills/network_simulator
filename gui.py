@@ -4,7 +4,6 @@
     :synopsis: This module implements a GUI for drawing a network.
 """
 
-import abc
 import logging
 import operator
 import tkinter
@@ -13,7 +12,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-class Dialog(tkinter.Toplevel, metaclass=abc.ABCMeta):
+class Dialog(tkinter.Toplevel):
     """Abstract base class for constructing dialog boxes.
 
     This base class handles widget creation/destruction, and implements
@@ -46,30 +45,29 @@ class Dialog(tkinter.Toplevel, metaclass=abc.ABCMeta):
         self.transient(parent)
 
         # Initialize dialog box content
-        body = tkinter.Frame(self)
-        self.initial_focus = self.body(body)
-        body.pack(padx=5, pady=5)
+        content = tkinter.Frame(self)
+        self.body(content)
+        content.pack(padx=5, pady=5)
         self.buttons()
 
         # Wait until the dialog box is visible
         self.wait_visibility()
         # Grab focus
         self.grab_set()
-        if not self.initial_focus:
-            self.initial_focus = self
         # Bind window closure to cancel handler
         self.protocol("WM_DELETE_WINDOW", self.cancel)
         # Set dialog box geometry
         self.geometry("+{}+{}".format(parent.winfo_rootx() + 50,
                                       parent.winfo_rooty() + 50))
         # Set focus to dialog widget body
-        self.initial_focus.focus_set()
+        self.focus_set()
         # Enter local event loop
         self.wait_window(self)
 
-    @abc.abstractmethod
     def body(self, master):
         """Create dialog box body.
+
+        Should be overridden by subclasses.
 
         :param master: parent of this widget
         :type master: tkinter.Frame
@@ -107,10 +105,8 @@ class Dialog(tkinter.Toplevel, metaclass=abc.ABCMeta):
 
         :return: None
         """
-        # If we got invalid data
+        # If we got invalid data, don't destroy the widget
         if not self.validate():
-            # Reset focus
-            self.initial_focus.focus_set()
             return
 
         # Remove this dialog box, as far as the window manager is concerned
@@ -132,7 +128,6 @@ class Dialog(tkinter.Toplevel, metaclass=abc.ABCMeta):
         # Destroy this widget
         self.destroy()
 
-    @abc.abstractmethod
     def validate(self):
         """Validate the data entered in the dialog box.
 
@@ -141,7 +136,6 @@ class Dialog(tkinter.Toplevel, metaclass=abc.ABCMeta):
         """
         pass
 
-    @abc.abstractmethod
     def apply(self):
         """Process the data entered in the dialog box.
 
@@ -159,17 +153,19 @@ class InputDialog(Dialog):
     """
 
     labels = list()
+    """Entry field labels."""
 
-    def _get_entry(self, i):
-        """Get the (integer) value of the ith entry field."""
-        return int(getattr(self, "f{}".format(i)).get())
+    types = list()
+    """Input types."""
+
+    def _get_entry(self, i, type_=str):
+        """Get the value of the ith entry field, and cast it."""
+        return type_(getattr(self, "f{}".format(i)).get())
 
     def body(self, master):
         """Create a labeled entry box for each label.
-
         :param master: parent of this widget
         :type master: tkinter.Frame
-
         :return: the entry field with initial focus, or None
         :rtype: tkinter.Widget
         """
@@ -187,32 +183,93 @@ class InputDialog(Dialog):
 
     def apply(self):
         """Store the values entered in the entry labels.
-
         :return: None
         """
         # Store the entered parameters in this dialog's result
-        self.result = [self._get_entry(i) for i in range(len(self.labels))]
+        self.result = tuple(
+            self._get_entry(i, self.types[i]) for i in range(len(self.labels)))
 
 
 class FlowDialog(InputDialog):
     """Dialog for specifying flow parameters.
+
+    The last entry in this dialog box is the TCP specification.  Since
+    different TCP algorithms take different parameters, the last entry
+    field takes a comma-separated list of values.  The first value must
+    be a valid TCP algorithm specifier. See :class:`process.Flow`, and
+    :class:`process.FAST` or :class:`process.Reno` for more details on
+    the input values.
 
     :param parent: parent of this widget
     :type parent: tkinter.Widget
     :param str title: dialog box title
     """
 
-    labels = ["Data", "Window", "Timeout", "Initial delay"]
+    labels = ["Data", "Initial delay", "Window", "Timeout", "TCP"]
     """Flow positional parameters (label names)."""
 
+    types = [int, int, int, int, {"FAST": [int, float], "Reno": []}]
+    """Input types."""
+
     def validate(self):
-        """Check that all values entered are >= 0.
+        """Check that all values entered are valid.
+
+        All values must be >= 0, and the TCP specifier must be one of
+        those supported by :class:`process.Flow`.
 
         :return: True iff the data is valid
         :rtype: bool
         """
-        return all(map(lambda i: self._get_entry(i) >= 0,
-                       range(len(self.labels))))
+        # Entry value type generator
+        type_gen = (t for t in self.types)
+        # Check that all but the TCP parameters are valid (>= 0)
+        valid = all(map(lambda i: self._get_entry(i, next(type_gen)) >= 0,
+                        range(len(self.labels) - 1)))
+        # Get the TCP type dict
+        tcp_types = next(type_gen)
+        # Extract the entered TCP values
+        tcp, *tcp_param = self._get_entry(len(self.labels) - 1).split(',')
+        # Check that the TCP specifier is valid
+        valid = valid and tcp in tcp_types.keys()
+        if valid:
+            # Get the appropriate list of parameter types
+            tcp_types = tcp_types[tcp]
+            # Check that all the TCP parameters are valid
+            valid = valid and all(map(lambda p: p[0](p[1]) >= 0,
+                                      zip(tcp_types, tcp_param)))
+        return valid
+
+    def apply(self):
+        """Store the values entered in the entry labels.
+
+        Values are cast according to FlowDialog.types; the last value maps
+        allowed TCP specifiers to the types they expect.
+
+        :return: None
+        """
+        # Entry field value generator
+        values = (self._get_entry(i) for i in range(len(self.labels)))
+        # Entry value type generator
+        type_gen = (t for t in self.types)
+        # Get the flow parameters
+        flow = tuple(next(type_gen)(next(values)) for i in range(2))
+        # Get the flow's data size
+        window = next(type_gen)(next(values))
+        # Get the flow's initial delay
+        timeout = next(type_gen)(next(values))
+        # Extract the TCP specifier & parameters from the last argument
+        tcp, *raw_param = next(values).split(',')
+        # Get the TCP type hash table
+        tcp_types = next(type_gen)
+        # TCP parameter type generator
+        tcp_types = (t for t in tcp_types[tcp])
+        # Typed TCP parameters
+        tcp_param = list()
+        # Cast the TCP parameters
+        for param, t in zip(raw_param, tcp_types):
+            tcp_param.append(t(param))
+        # Set the results
+        self.result = (flow, (tcp, [window, timeout] + tcp_param))
 
 
 class LinkDialog(InputDialog):
@@ -226,13 +283,16 @@ class LinkDialog(InputDialog):
     labels = ["Capacity", "Buffer size", "Delay"]
     """Link positional parameters (label names)."""
 
+    types = [int, int, int]
+    """Link parameter types."""
+
     def validate(self):
         """Check that all values entered are >= 0.
 
         :return: True iff the data is valid
         :rtype: bool
         """
-        return all(map(lambda i: self._get_entry(i) >= 0,
+        return all(map(lambda i: self._get_entry(i, self.types[i]) >= 0,
                        range(len(self.labels))))
 
 

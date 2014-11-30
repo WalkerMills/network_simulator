@@ -4,6 +4,7 @@
     :synopsis: This module defines network components as SimPy resources
 """
 
+import heapq
 import logging
 import queue
 import simpy
@@ -84,6 +85,16 @@ class Packet(object):
         """
         return self._id
 
+    # @id.setter
+    def set_id(self, value):
+        """Sets this packet's ID to a new value
+
+        :param function value: new value of the ID
+        :return: None
+        """
+        logger.info("setter called")
+        self._id = value
+
     @property
     def data(self):
         """Return this packet's payload of data.
@@ -93,13 +104,16 @@ class Packet(object):
         """
         return self._data
 
-    def acknowledgement(self):
+    def acknowledge(self, expected):
         """Generate an acknowledgement for this packet.
+        Packets return an id based on the next packet id expected 
+        by the host.
 
+        :param int expected: the next packet id expected (ACK payload)
         :return: an acknowledgement packet matching this packet
         :rtype: :class:`ACK`
         """
-        return ACK(self._dest, self._src, self._flow, self._id)
+        return ACK(self._dest, self._src, self._flow, self._id, expected)
 
 
 class ACK(Packet):
@@ -110,13 +124,14 @@ class ACK(Packet):
     :param int dest: destination address
     :param int fid: source flow id
     :param int pid: packet id
+    :param int expected: next expected packet id
     """
 
     # Simulated acknowledgement packet size (bits)
     size = 512
     """Packet size (bits)."""
 
-    def __init__(self, src, dest, fid, pid):
+    def __init__(self, src, dest, fid, pid, expected):
         # Packet source address
         self._src = src
         # Packet destination address
@@ -126,7 +141,38 @@ class ACK(Packet):
         # ID of the packet which triggered this acknowledgement
         self._id = pid
         # Acknowledgement packets have no payload
-        self._data = None
+        self._data = expected
+
+
+class Routing(Packet):
+    """This class represents a routing packet.
+
+    :param object payload: packet payload
+    """    
+
+    # Simulated routing packet size (bits)
+    size = 512
+    """Packet size (bits)"""
+
+    def __init__(self, payload):
+        # Packet source address
+        self._src = None
+        # Packet destination address
+        self._dest = None
+        # Flow ID on the source host
+        self._flow = None
+        # Packet ID
+        self._id = None
+        # Packet data
+        self._data = payload
+
+
+class Finish(Routing):
+    """This class represents a packet used to communicate the
+    	end conditions for dynamic routing
+
+    :param object payload: packet payload
+    """    
 
 
 class LinkTransport(simpy.events.Event):
@@ -138,29 +184,33 @@ class LinkTransport(simpy.events.Event):
 
     :param link: the link that this transport event binds to
     :type link: :class:`LinkResource`
-    :param bool direction: the (binary) direction of this transport event
+    :param int direction: the direction of this transport event
     :param packet: the packet to transport
     :type packet: :class:`Packet`
     """
 
     def __init__(self, link, direction, packet):
         # Initialize event
-        super(LinkTransport, self).__init__(link._env)
+        super(LinkTransport, self).__init__(link.env)
         self._link = link
         self._direction = direction
         self._packet = packet
-        # logger.info("transport event triggered for packet {}, {}, {} at "
-        #             "time {}".format(self._packet.src, self._packet.flow,
-        #                              self._packet.id, self._link._env.now))
 
         # Enqueue the packet for transmission, if the buffer isn't full
         if self._link._fill[direction] + self._packet.size <= self._link.size:
+            # logger.info("enqueueing packet {}, {}, {} at time {}".format(
+            #     self._packet.src, self._packet.flow, self._packet.id, 
+            #     self._link.env.now))
             # Increment buffer fill
             self._link._fill[direction] += self._packet.size
             # Enqueue self._packet
             self._link._queues[direction].append(self)
-            # Flush as much of the buffer as possible through the self._link
-            self._link.flush(direction)
+        else:
+            logger.info("dropped packet {}, {}, {} at time {}".format(
+                self._packet.src, self._packet.flow, self._packet.id, 
+                self._link.env.now))
+        # Flush as much of the buffer as possible through the self._link
+        self._link.flush(direction)
 
     def __enter__(self):
         return self
@@ -206,15 +256,13 @@ class LinkResource(object):
     """
 
     def __init__(self, env, capacity, size):
-        self._env = env
+        self.env = env
         # Link capacity (bps)
         self._capacity = capacity
         # Buffer size (bits)
         self._size = size
         # Buffer fill (bits)
         self._fill = [0, 0]
-        # Static link cost
-        self._static_cost = None
         # Link traffic (bps)
         self._traffic = [0, 0]
 
@@ -240,31 +288,14 @@ class LinkResource(object):
         """
         return self._size
 
-    @property
-    def static_cost(self):
-        """The static cost of this link.
-
-        Statc cost is calculated as link delay divided by link capacity.
-        """
-        # If static cost is unintialized
-        if self._static_cost is None:
-            try:
-                # Set static cost equal to delay / capacity
-                self._static_cost = self._delay / self._capacity 
-            # If capacity is 0 bps, make the cost infinite
-            except ZeroDivisionError:
-                self._static_cost = float("inf")
-        # Return static cost
-        return self._static_cost
-
-    def traffic(self, direction):
-        """The traffic across the link in the given direction.
+    def available(self, direction):
+        """The available link capacity in the given direction.
 
         :param int direction: link direction
         :return: directional traffic (bps)
         :rtype: int
         """
-        return self._traffic[direction]
+        return self._capacity - self._traffic[direction]
 
     def update_traffic(self, direction, delta):
         """Update the link traffic in a given direction.
@@ -289,27 +320,6 @@ class LinkResource(object):
         """
         return self._fill[direction] / self._size
 
-    def dynamic_cost(self, direction):
-        """Calculate the dynamic cost of a direction on this link.
-
-        Dynamic cost is directly proportional to link traffic and buffer
-        fill.
-
-        :param int direction: link direction to compute dynamic cost for
-        :return: link traffic multiplied by buffer fill proportion
-        :rtype: float
-        """
-        return self.traffic(direction) * self.res.fill(direction)
-
-    def cost(self, direction):
-        """Return the total cost of a direction on this link.
-
-        Total cost is simply calculated as static cost + dynamic cost.
-
-        :param int direction: link direction to compute cost for
-        """
-        return self._static_cost + self.dynamic_cost(direction)
-
     def flush(self, direction):
         """Send as many packets as possible from the buffer.
 
@@ -325,15 +335,13 @@ class LinkResource(object):
             # Dequeue a packet
             event = self._queues[direction].popleft()
             # If the link isn't busy, flush another packet
-            if event.packet.size + self.traffic(direction) <= self._capacity:
+            if event.packet.size + self._traffic[direction] <= self._capacity:
                 flushed.append(event.packet)
                 # Update buffer fill
                 self._fill[direction] -= event.packet.size
             else:
                 # Requeue the packet
                 self._queues[direction].appendleft(event)
-                print(event)
-                print(event.processed)
                 break
 
         if flushed:
@@ -356,7 +364,7 @@ class ReceivePacket(simpy.events.Event):
 
     def __init__(self, resource, packet):
         # Initialize event
-        super(ReceivePacket, self).__init__(resource._env)
+        super(ReceivePacket, self).__init__(resource.env)
         self.resource = resource
         self.packet = packet
 
@@ -376,7 +384,7 @@ class ReceivePacket(simpy.events.Event):
 
 
 class PacketQueue(object):
-    """SimPy resource for queuing packets.
+    """SimPy resource for queueing packets.
 
     This class is a FIFO SimPy resource. It receives packets, but does not
     accept packet transmission requests.  Every packet arrival triggers
@@ -388,7 +396,7 @@ class PacketQueue(object):
     """
 
     def __init__(self, env, addr):
-        self._env = env
+        self.env = env
         # Router address
         self._addr = addr
         # Queue of packet events to process
@@ -428,40 +436,46 @@ class HostResource(PacketQueue):
     :param int addr: the address of this host
     """
 
+    def __init__(self, env, addr):
+        super(HostResource, self).__init__(env, addr)
+        # A hash table mapping (src, flow) -> min heap of expected indices
+        self._expected = dict()
+
     def _receive(self):
         """Receive a packet, yield, and return an outbound packet."""
+        # Pop a packet from the queue
         event = self._packets.pop(0)
-
         # If a data packet has reached its destination
         if event.packet.dest == self.addr and event.packet.size == Packet.size:
             logger.info("host {} triggering acknowledgement for packet {}, {}"
                         " at time {}".format(self._addr, event.packet.flow,
-                                             event.packet.id, self._env.now))
-            
-            # Send back an ackonwledgement packet
-            event.succeed(event.packet.acknowledgement())
+                                             event.packet.id, self.env.now))
+            # Get the event's ID in the hash table
+            flow = (event.packet.src, event.packet.flow)
+            # If the flow doesn't have an entry
+            if flow not in self._expected.keys():
+                # Initialize the min heap to expect the 0th packet first
+                self._expected[flow] = [0]
+            # Min heap for this flow
+            heap = self._expected[flow]
+            # If we got the packet we were expecting
+            if event.packet.id == heap[0]:
+                # And we haven't already received the next packet
+                if heap[0] + 2 not in heap[1:3]:
+                    # Set the heap to expect the next packet in the sequence
+                    # (replaces heapq.heappoppush for this specific case)
+                    heap[0] += 1
+                else:
+                    # Pop the ID of the received packet off the heap
+                    heapq.heappop(heap)
+            else:
+                # Push the ID expected after this packet onto the heap
+                heapq.heappush(heap, event.packet.id + 1)
+            # Pop any ID's for packet's we've already received
+            while heap[0] + 1 in heap[1:3]:
+                heapq.heappop(heap)
+            # Return an acknowledgement with the next expected ID
+            event.succeed(event.packet.acknowledge(heap[0]))
         else:
-            # Transmit the packet
+            # Return the packet popped from the queue
             event.succeed(event.packet)
-
-
-class RouterResource(PacketQueue):
-    """SimPy resource representing a router.
-
-    This is a FIFO resource which handles packets for a router. When a
-    routing packet is received, it triggers outbound routing packet
-    transmission, and possibly a routing table update.  All outbound data
-    or routing packets are added to a sigle, infinite capacity queue, to
-    be popped and sent along the appropriate transport handler. 
-
-    :param simpy.Environment env: the simulation environment
-    :param int addr: the address of this router
-    """
-
-    def _receive(self):
-        """Receive a packet, yield, and return an outbound packet."""
-
-        # TODO: handle routing packets
-
-        event = self._packets.pop(0)
-        event.succeed(event.packet)
