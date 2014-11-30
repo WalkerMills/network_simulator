@@ -41,8 +41,7 @@ class Network(object):
 
     :param adjacent: adjacency lists of links & flows defining a network
     :type adjacent: ([((str, str), (int, int, int))], 
-                     [((str, str), ((int, int), (str, list)))]), or
-                    :class:`test.Case`
+        [((str, str), ((int, int), (str, list)))]), or :class:`test.Case`
     :param str tcp: TCP specifier. Used iff adjacent is a :class:`test.Case`
     """
 
@@ -142,7 +141,8 @@ class Network(object):
     def simulate(self, until_=None):
         """Run the initialized simulation.
 
-        :param int until_: time to run the simulation until
+        :param until_: time or event to run the simulation until
+        :type until_: int or ``simpy.events.Event``
         :return: all monitored values
         :rtype: dict
         """
