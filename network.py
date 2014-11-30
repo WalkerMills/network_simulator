@@ -98,6 +98,8 @@ class Network(object):
 
         # For each entry in the adjacency list
         for tags, parameters in edges:
+            # Add link addr to parameters used to create a link
+            parameters = list(parameters) + [len(self._links)]
             # Make a new link
             link = process.Link(self.env, *parameters)
             # Initialize a list of endpoints

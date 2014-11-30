@@ -258,6 +258,19 @@ class FAST(object):
                 if not self._finished.triggered:
                     self._finished.succeed()
 
+    def get_departure(self, pid):
+        """Returns the departure time of a packet with given pid
+
+        :return: None, if packet id doens't match
+        :return: time, if packet id has a match
+        """
+        try:
+            _, time = next(filter(lambda p: p[0].id == pid, 
+                                  self._unacknowledged.items()))
+        except StopIteration:
+            time = None
+        return time
+
     def recover(self):
         """Enter recovery mode.
 
@@ -443,6 +456,22 @@ class Reno(object):
         if self._wait_proc is not None:
             self._wait_proc.interrupt()
 
+        def get_departure(self, pid):
+            """Returns the departure time of a packet with given pid.
+
+            If there is a match for the packet id, return its departure time,
+            otherwise, return None
+
+            :return: departure time
+            :rtype: int or None
+            """
+            try:
+                _, time = next(filter(lambda p: p[0].id == pid, 
+                                      self._unacknowledged.items()))
+            except StopIteration:
+                time = None
+            return time
+
     def send(self):
         """Send all data packets.
 
@@ -520,6 +549,14 @@ class Flow(object):
         self._data = data
         # Time (simulation time) to wait before initial transmission
         self._delay = delay
+        # Bits transmitted by flow
+        self._transmitted = 0
+        # Bits received by flow
+        self._received = 0
+        # List of roundtrip times for packets in given timestep
+        self._times = list()
+        # Reference time for collecting packet RTT's
+        self._last_arrival = 0
         # Check for a valid TCP specifier
         if tcp in self.allowed_tcp:
             # Initialize TCP object
@@ -528,6 +565,13 @@ class Flow(object):
             raise ValueError("unsupported TCP algorithm \"{}\"".format(tcp))
         # Register this flow with its host, and get its ID
         self._id = self._host.register(self)
+
+        # create getter for data received
+        self.env.register("flow_received{}{}".format(self._id, self._host.addr),
+                              lambda: self._received)
+        # create getter for data transmitted
+        self.env.register("flow_transmitted{}{}".format(
+            self._id, self._host.addr), lambda: self._transmitted)
 
     @property
     def dest(self):
@@ -578,6 +622,12 @@ class Flow(object):
         """
         logger.info("flow {}, {} acknowledges packet {} at time {}".format(
             self._id, self._host.addr, ack.id, self.env.now))
+
+        # 
+        self._update_rtt(ack.id)
+        # update number of received bits
+        self._received += resources.ACK.size
+
         # Send this acknowledgement to the TCP algorithm
         yield self.env.process(self._tcp.acknowledge(ack))
 
@@ -616,7 +666,35 @@ class Flow(object):
         :param packet: the data packet to send
         :type packet: :class:`resources.Packet`
         """
+        #update transmitted number of bits
+        self._transmitted += packet.size
+
         yield self.env.process(self._host.receive(packet))
+
+    def _update_rtt(self, pid):
+        """Update list of packet RTT's.
+        """
+        # make sure list isn't empty before creating getter
+        if not self._times:
+            # create getter for packet roundtrip ties
+            self.env.register("flow{}{}_rtt".format(self._id, self._host.addr), 
+                              lambda: sum(self._times) / len(self._times))
+
+        # Get departure time of packet
+        depart = self._tcp.get_departure(pid)
+        # Calcualte roundtrip time of packet
+        rtt = self.env.now - depart
+
+        # if this is the first packet in a new timestep,
+        if self.env.now  > self._last_arrival:
+            # reset list of rtt's
+            self._times = list()
+            # update latest arrival time
+            self._last_arrival = self.env.now
+        # append packet to list of RTT's
+        self._times.append(rtt)
+
+
 
 
 class Host(object):
@@ -639,6 +717,17 @@ class Host(object):
         self._flows = list()
         # Outbound link
         self._transport = None
+        # Bits transmitted by host
+        self._transmitted = 0
+        # Bits received by host
+        self._received = 0
+
+        # create getter for transmitted data
+        self.res.env.register("host_transmitted{}".format(addr),
+                              lambda: self._transmitted)
+        # create getter for received data
+        self.res.env.register("host_received{}".format(addr),
+                              lambda: self._received)
 
     @property
     def addr(self):
@@ -692,6 +781,10 @@ class Host(object):
         """
         logger.info("host {} received packet {}, {} at time {}".format(
             self.addr, packet.flow, packet.id, self.res.env.now))
+
+        # update bits received by host
+        self._received += packet.size
+
         # Queue new packet for transmission, and dequeue a packet. The
         # HostResource.receive event returns an outbound ACK if the
         # dequeued packet was an inbound data packet
@@ -727,6 +820,10 @@ class Host(object):
             logger.info("host {} transmitting packet {}, {}, {} at time"
                         " {}".format(self.addr, packet.src, packet.flow, 
                                      packet.id, self.res.env.now))
+            
+            # update bits transmitted by host
+            self._received += packet.size
+
             # Transmit an outbound packet
             yield self.res.env.process(self._transport.send(packet))
         else:
@@ -751,18 +848,31 @@ class Link(object):
     :param int delay: the link delay in simulation time
     """
 
-    def __init__(self, env, capacity, size, delay):
+    def __init__(self, env, capacity, size, delay, addr):
         # Initialize link resource
         self.res = resources.LinkResource(env, capacity, size)
         # Link delay (simulation time)
         self._delay = delay
-
+        # link address
+        self._addr = addr
         # Endpoints for each direction
         self._endpoints = [None, None]
         # "Upload" handler
         self._up = Transport(self, resources.UP)
         # "Download" handler
         self._down = Transport(self, resources.DOWN)
+        # Total number of bits transmitted by link
+        self._transmitted = 0
+
+        # create getter for buffer occupancy
+        self.res.env.register("link_fill{}".format(addr), 
+                              lambda: (self.res.buffered))
+        # create getter for dropped packets
+        self.res.env.register("link_dropped{}".format(addr), 
+                              lambda: self.res.dropped)
+        # create getter for transmitted data
+        self.res.env.register("link_transmitted{}".format(addr),
+                              lambda: self._transmitted)
 
     @property
     def delay(self):
@@ -853,6 +963,9 @@ class Link(object):
         # Transmit packet after waiting, as if sending the packet
         # across a physical link
         for p in packets:
+            # Update total bits transmitted by link
+            self._transmitted += p.size
+
             logger.info("transmitting packet {}, {}, {} at time {}".format(
                 p.src, p.flow, p.id, self.res.env.now))
             # Increment directional traffic

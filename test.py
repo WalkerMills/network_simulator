@@ -142,7 +142,7 @@ class MonitoredEnvironment(simpy.Environment):
     def _update(self):
         """Update all monitored values."""
         # For each identifier
-        for name, getter in self._getters.keys():
+        for name, getter in self._getters.items():
             # Append a new timestamped value to the list 
             self._monitored[name].append((self._now, getter()))
 

@@ -209,6 +209,9 @@ class LinkTransport(simpy.events.Event):
             logger.info("dropped packet {}, {}, {} at time {}".format(
                 self._packet.src, self._packet.flow, self._packet.id, 
                 self._link.env.now))
+            #update dropped count
+            self._link._dropped += 1
+
         # Flush as much of the buffer as possible through the self._link
         self._link.flush(direction)
 
@@ -218,9 +221,7 @@ class LinkTransport(simpy.events.Event):
     def __exit__(self, exception, value, traceback):
         pass
 
-    def cancel(self, exception, value, traceback):
-        logger.info("{}\t{}".format(exception, value))
-        self.__exit__()
+    cancel = __exit__
 
     @property
     def direction(self):
@@ -265,6 +266,8 @@ class LinkResource(object):
         self._fill = [0, 0]
         # Link traffic (bps)
         self._traffic = [0, 0]
+        # Number of dropped packets
+        self._dropped = 0
 
         # Buffers for each edge direction
         self._queues = (deque(), deque())
@@ -275,9 +278,23 @@ class LinkResource(object):
     """Transport packets across the link in a given direction."""
 
     @property
+    def buffered(self):
+        """Return number of packets in link buffers"""
+        return sum(len(q) for q in self._queues)
+
+    @property
     def capacity(self):
         """The maximum bitrate of the link in bps."""
         return self._capacity
+
+    @property
+    def dropped(self):
+        """The number of dropped packets
+
+        :return: dropped packets
+        :rtype: int
+        """
+        return self._dropped
 
     @property
     def size(self):
