@@ -36,6 +36,17 @@ extensions = [
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
 
+# Add mock modules
+from unittest.mock import MagicMock
+
+class Mock(MagicMock):
+    @classmethod
+    def __getattr__(cls, name):
+            return Mock()
+
+MOCK_MODULES = ['_tkinter']
+sys.modules.update((mod_name, Mock()) for mod_name in MOCK_MODULES)
+
 # The suffix of source filenames.
 source_suffix = '.rst'
 
