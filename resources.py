@@ -85,6 +85,16 @@ class Packet(object):
         """
         return self._id
 
+    # @id.setter
+    def set_id(self, value):
+        """Sets this packet's ID to a new value
+
+        :param function value: new value of the ID
+        :return: None
+        """
+        logger.info("setter called")
+        self._id = value
+
     @property
     def data(self):
         """Return this packet's payload of data.
@@ -96,6 +106,8 @@ class Packet(object):
 
     def acknowledge(self, expected):
         """Generate an acknowledgement for this packet.
+        Packets return an id based on the next packet id expected 
+        by the host.
 
         :param int expected: the next packet id expected (ACK payload)
         :return: an acknowledgement packet matching this packet
@@ -130,6 +142,37 @@ class ACK(Packet):
         self._id = pid
         # Acknowledgement packets have no payload
         self._data = expected
+
+
+class Routing(Packet):
+    """This class represents a routing packet.
+
+    :param object payload: packet payload
+    """    
+
+    # Simulated routing packet size (bits)
+    size = 512
+    """Packet size (bits)"""
+
+    def __init__(self, payload):
+        # Packet source address
+        self._src = None
+        # Packet destination address
+        self._dest = None
+        # Flow ID on the source host
+        self._flow = None
+        # Packet ID
+        self._id = None
+        # Packet data
+        self._data = payload
+
+
+class Finish(Routing):
+    """This class represents a packet used to communicate the
+    	end conditions for dynamic routing
+
+    :param object payload: packet payload
+    """    
 
 
 class LinkTransport(simpy.events.Event):
@@ -427,7 +470,7 @@ class HostResource(PacketQueue):
                     heapq.heappop(heap)
             else:
                 # Push the ID expected after this packet onto the heap
-                heapq.heappush(event.packet.id + 1)
+                heapq.heappush(heap, event.packet.id + 1)
             # Pop any ID's for packet's we've already received
             while heap[0] + 1 in heap[1:3]:
                 heapq.heappop(heap)
@@ -436,25 +479,3 @@ class HostResource(PacketQueue):
         else:
             # Return the packet popped from the queue
             event.succeed(event.packet)
-
-
-class RouterResource(PacketQueue):
-    """SimPy resource representing a router.
-
-    This is a FIFO resource which handles packets for a router. When a
-    routing packet is received, it triggers outbound routing packet
-    transmission, and possibly a routing table update.  All outbound data
-    or routing packets are added to a single, infinite capacity queue, to
-    be popped and sent along the appropriate transport handler. 
-
-    :param simpy.Environment env: the simulation environment
-    :param int addr: the address of this router
-    """
-
-    def _receive(self):
-        """Receive a packet, yield, and return an outbound packet."""
-
-        # TODO: handle routing packets
-
-        event = self._packets.pop(0)
-        event.succeed(event.packet)

@@ -9,6 +9,7 @@ import simpy
 
 import gui
 import process
+import test
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -29,20 +30,25 @@ class Network(object):
     only host tags are allowed.  Link arguments are all in bits/bps, as
     is the data parameter for flows.  Delay is given in simulation time.
     The tcp parameter is a string which determines which TCP algorithm to
-    use; accepted values are currently \"FAST\".  The tcp_param parameter
-    is a list containing the arguments for initializing the TCP object,
-    and will change depending on the TCP algorithm specified.  See
-    :mod:`process` for details of the currently implemented TCP
-    algorithms.
+    use; see :data:`process.Flow.allowed_tcp` for accepted TCP specifiers.
+    The tcp_param parameter is a list containing the arguments for
+    initializing the TCP object, and will change depending on the TCP
+    algorithm specified.  See :mod:`process` for details of the currently
+    implemented TCP algorithms.  Alternatively, adjacent may be a test
+    case, as defined by the enumerated type :class:`test.Case`.  If so,
+    the ``tcp`` parameter may be a (valid) TCP specifier, used for all
+    flows in the given test case.
 
     :param adjacent: adjacency lists of links & flows defining a network
-    :type adjacent`: ([((str, str), (int, int, int))], 
-                      [((str, str), ((int, int), (str, list)))])
+    :type adjacent: ([((str, str), (int, int, int))], 
+                     [((str, str), ((int, int), (str, list)))]), or
+                    :class:`test.Case`
+    :param str tcp: TCP specifier. Used iff adjacent is a :class:`test.Case`
     """
 
-    def __init__(self, adjacent=None):
+    def __init__(self, adjacent=None, tcp='FAST'):
         # Simulation environment
-        self.env = simpy.Environment()
+        self.env = test.MonitoredEnvironment()
         # Table of hosts in this network
         self._hosts = dict()
         # Table of routers in this network
@@ -56,6 +62,10 @@ class Network(object):
         if adjacent is None:
             # Get edges & flows from GUI input
             adjacent = gui.draw()
+        # Alternatively, if a test case was specified
+        elif isinstance(adjacent, test.Case):
+            # Build the corresponding adjacency list
+            adjacent = test.TestCase.adjacent(adjacent, tcp)
         # Populate the network
         self._build_network(*adjacent)
 
@@ -93,9 +103,8 @@ class Network(object):
             link = process.Link(self.env, *parameters)
             # Initialize a list of endpoints
             endpoints = list()
-
+            # Logger parameters
             log_args = list()
-
             # Add an endpoint for each tag 
             for tag in tags:
                 # Retrieve the address from this tag
@@ -133,12 +142,25 @@ class Network(object):
     def simulate(self, until_=None):
         """Run the initialized simulation.
 
-        :param int until_: The time to run the simulation until
-        :return: None
+        :param int until_: time to run the simulation until
+        :return: all monitored values
+        :rtype: dict
         """
+        # Begin routing table initialization
+        router_proc = \
+            [self.env.process(r.begin()) for r in self._routers.values()]
         # Initialize packet generating processes for each flow
-        processes = [self.env.process(f.generate()) for f in self._flows]
+        flow_proc = [self.env.process(f.generate()) for f in self._flows]
+        # If we didn't get a termination condition
+        if until_ is None:
+            # Terminate once all flows are finished transmitting data
+            until_ = simpy.events.AllOf(self.env, 
+                                        [f.finished for f in self._flows])
         # Run the simulation
         self.env.run(until=until_)
+        # Retrieve monitored values
+        values = self.env.monitored()
         # Reset the environment
-        self.env = simpy.Environment()
+        self.env = test.MonitoredEnvironment()
+        # Return the monitored values
+        return values
