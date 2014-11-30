@@ -254,8 +254,9 @@ class FAST(object):
                     self._window_ctrl_proc.interrupt()
                 except RuntimeError:
                     pass
-                # Mark this TCP algorithm as finished
-                self._finished.succeed()
+                # Mark this TCP algorithm as finished if it isn't already
+                if not self._finished.triggered:
+                    self._finished.succeed()
 
     def recover(self):
         """Enter recovery mode.
@@ -468,8 +469,9 @@ class Reno(object):
                 self._gen = (p for p in list(self._unacknowledged.keys())[:])
                 # Resend all dropped packets
                 yield self._flow.env.process(self.send())
-            # Mark this TCP algorithm as finished
-            self._finished.succeed()
+            # Mark this TCP algorithm as finished, if it isn't already
+            if not self._finished.triggered:
+                self._finished.succeed()
 
     def transmit(self, packet):
         """Transmit a data packet to the host flow.
@@ -948,7 +950,7 @@ class Router(object):
                 return     
 
             # update new routing table if host isn't in table
-            if not(host in self._update_table.keys()):
+            if not (host in self._update_table.keys()):
                 self._update_table[host] = (port, cost)
                 yield self.res.env.process(
                     self._broadcast_packet(host, cost, path, port))
@@ -980,7 +982,10 @@ class Router(object):
 
         # check for one degree of convergence (this router and neighbors)
         if self._converged and all(self._finish_table.values()):
-            self._routing_table = self._update_table
+            # If there is an updated routing table
+            if self._update_table:
+                # Replace the old table
+                self._routing_table = self._update_table
             # and reset all variables used for tracking convergence
             self._last_arrvial = float('inf')
             self._converged = False
