@@ -63,7 +63,7 @@ class TestCase(object):
 
     tcp_parameters = {
         Case.zero: {'FAST': [[1, 50, 384000]], 'Reno': [[1, 50]]}, 
-        Case.one: {'FAST': [[1, 50, 384000]], 'Reno': [[1, 50]]},
+        Case.one: {'FAST': [[1, 100, 384000]], 'Reno': [[1, 100]]},
         Case.two: {'FAST': itertools.repeat([1, 200, 768000], 3), 
                    'Reno': itertools.repeat([1, 200], 3)}
     }
@@ -122,7 +122,6 @@ class MonitoredEnvironment(simpy.Environment):
         # Dictionary mapping identifier -> [(time, monitored value)]
         self._monitored = dict()
 
-    @property
     def monitored(self):
         """The timestamped values of all monitored attributes.
 
@@ -131,7 +130,7 @@ class MonitoredEnvironment(simpy.Environment):
         """
         return self._monitored
 
-    def monitored(self, name):
+    def values(self, name):
         """The values for the given identifier.
 
         :param str name: the identifier to retrieve values for
@@ -149,6 +148,8 @@ class MonitoredEnvironment(simpy.Environment):
 
     def register(self, name, getter):
         """Register a new identifier.
+
+        Raise a KeyError if the given identifier already exists.
 
         :param str name: the identifier
         :param function getter: a function to update the monitored value with

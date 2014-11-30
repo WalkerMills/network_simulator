@@ -151,11 +151,16 @@ class Network(object):
             [self.env.process(r.begin()) for r in self._routers.values()]
         # Initialize packet generating processes for each flow
         flow_proc = [self.env.process(f.generate()) for f in self._flows]
+        # If we didn't get a termination condition
+        if until_ is None:
+            # Terminate once all flows are finished transmitting data
+            until_ = simpy.events.AllOf(self.env, 
+                                        [f.finished for f in self._flows])
         # Run the simulation
         self.env.run(until=until_)
         # Retrieve monitored values
-        values = self.env.monitored
+        values = self.env.monitored()
         # Reset the environment
         self.env = test.MonitoredEnvironment()
-
+        # Return the monitored values
         return values

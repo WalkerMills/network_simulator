@@ -20,13 +20,278 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-class Reno(object):
-    """SimPy process representing the flow control using TCP Reno.
+class FAST(object):
+    """SimPy process implementing FAST TCP.
 
-    TCP Reno multiplicative increases the flow window size at the 
-    acknowledgement of each packet: slow start phase. When we drop 
-    packets or reach a threshold, we drop the window down to half its
-    current size and enter the congestion avoidance phase. 
+    :param flow: the flow to link this TCP instance to
+    :type flow: :class:`Flow`
+    :param int window: initial window size (in packets)
+    :param int timeout: packet acknowledgement timeout (simulation time)
+    :param int alpha: desired number of enqueued packets at equilibrium
+    :param float gamma: window update weight
+    """
+
+    def __init__(self, flow, window, timeout, alpha, gamma=0.5):
+        # The flow running this TCP algorithm
+        self._flow = flow
+        # Window size (packets)
+        self._window = window
+        # Time after which packets are considered dropped
+        self._timeout = timeout
+        # Packets in buffer at equilibrium
+        self._alpha = alpha
+        # Window update weight
+        self._gamma = gamma
+
+        # Mean round trip time
+        self._mean_trip = float("inf")
+        # Minimum observed round trip time
+        self._min_trip = float("inf")
+        # Estimated queueing delay
+        self._delay = float("inf")
+        # Packet generator
+        self._gen = self._flow.generator()
+        # Hash table mapping unacknowledged packet -> departure time
+        self._unacknowledged = dict()
+        # Dropped packet (retransmission) queue
+        self._dropped = Queue()
+        # Next ID's expected by the destination host.  Last 4 are cached to
+        # check for packet dropping (3 duplicate ACK's)
+        self._next = deque(maxlen=4)
+        # Window updating process
+        self._window_ctrl_proc = None
+        # Finish event
+        self._finished = simpy.events.Event(self._flow.env)
+
+    @property
+    def finished(self):
+        """Transmission finished event.
+
+        This event is only successful once all data packets have been
+        sent, and any dropped packets retransmitted successfully.
+        """
+        return self._finished
+
+    @property
+    def timeout(self):
+        """The time after which packets are considered dropped.
+
+        :return: acknowledgement timeout (simulation time)
+        :rtype: int
+        """
+        return self._timeout
+
+    @property
+    def window(self):
+        """Transmission window size, in bits.
+
+        :return: window size (bits)
+        :rtype: int
+        """
+        return self._window
+
+    def _estimate(self, trip):
+        """Update the mean round trip time & estimated queueing delay.
+
+        Mean round trip time is calculated as a moving average, and
+        queueing delay is taken to be the difference between that mean
+        and the minimum observed round trip time.
+        """
+        # Calculate weight for round trip mean update
+        eta = min(3.0 / self._window, 0.25)
+        # If the mean is unset
+        if self._mean_trip == float("inf"):
+            # Set the mean trip to the given value
+            self._mean_trip = trip
+        else:
+            # Update moving average of round trip mean
+            self._mean_trip = (1 - eta) * self._mean_trip + eta * trip
+
+        # Update minimum round trip time, if necessary
+        if trip < self._min_trip:
+            self._min_trip = trip
+
+        # Update estimated queueing delay
+        self._delay = self._mean_trip - self._min_trip
+
+    def _update_dropped(self):
+        """Append timed out packets to the dropped packet queue."""
+        # For each unacknowledged packet
+        for packet, time in list(self._unacknowledged.items())[:]:
+            # If it has timed out
+            if time <= self._flow.env.now - self._timeout:
+                # Mark it as dropped
+                self._dropped.put(packet)
+                # Remove it from the unacknowledged packets
+                del self._unacknowledged[packet]
+
+    def _update_window(self):
+        """Update the maximum window size."""
+        # Calculate the new window size, as directed by FAST TCP spec
+        window = (1 - self._gamma) * self._window + self._gamma * \
+            (self._window * self._min_trip / self._mean_trip + self._alpha)
+        # Update window size by at most doubling it
+        self._window = min(2 * self._window, window)
+
+    def _window_control(self):
+        """Periodically update the window size."""
+        try:
+            while True:
+                # Wait for acknowledgements
+                yield self._flow.env.timeout(self._timeout)
+                # Update dropped packets
+                self._update_dropped()
+                # If there exist dropped packets
+                if not self._dropped.empty():
+                    # Enter recovery mode (updates window size)
+                    yield self._flow.env.process(self.recover())
+                else:
+                    # Otherwise, just update the window size
+                    self._update_window()
+        except simpy.events.Interrupt:
+            pass
+
+    def _window_size(self):
+        """Calculate the transimssion window size.
+
+        Window size is equal to the difference in the ID's of the earliest
+        and latest packets sent, plus one.
+        """
+        # If there are no unacknowledged packets
+        if len(self._unacknowledged) == 0:
+            # The window is empty
+            return 0
+        # Sort the unacknowledged ID's
+        ids = sorted(packet.id for packet in self._unacknowledged.keys())
+        # Current window size = difference between the largest & smallest
+        # ID's + 1
+        return ids[-1] - ids[0] + 1
+
+    def acknowledge(self, ack):
+        """Process an acknowledgement packet.
+
+        :param ack: the acknowledgement packet
+        :type ack: :class:`resources.ACK`
+        :return: None
+        """
+        # ID of the packet being acknowledged
+        pid = ack.id
+        # ID expected next by the destination host
+        expected = ack.data
+
+        # Push this into the deque (if the deque is full, this is
+        # equivalent to self._next.popleft() before appending)
+        self._next.append(expected)
+        # Get the unacknowledged packet
+        packet = next(filter(lambda p: p.id == pid, 
+                      self._unacknowledged.keys()))
+        # Calculate round trip time
+        rtt = self._flow.env.now - self._unacknowledged[packet]
+        # Mark packet as acknowledged
+        del self._unacknowledged[packet]
+        # Update mean round trip time & queueing delay
+        self._estimate(rtt)
+        # If we have 3 dropped ACK's
+        if self._next.count(self._next[0]) == self._next.maxlen:
+            # Enter recovery
+            yield self._flow.env.process(self.recover())
+        # If there are more packets to generate
+        if self._gen is not None:
+            # Try to inject packets into the network
+            yield self._flow.env.process(self.burst())
+
+    def burst(self, recover=False):
+        """Inject packets into the network.
+
+        If recover is True, then the packets are taken from the dropped
+        packet queue.
+
+        :param bool recover: flag for recovery mode
+        :return: None
+        """
+        # If we are in recovery mode
+        if recover:
+            # Take packets from the dropped packet queue, as long as there
+            # are packets to take.  If there are multiple simultaneous
+            # burst processes, each will take as many packets as they can
+            # consume before the queue is exhausted
+            gen = itertools.takewhile(
+                lambda _: self._dropped.qsize() >= 0,
+                (self._dropped.get_nowait() for i in range(
+                    self._dropped.qsize())))
+        else:
+            # Otherwise, take packets from the data packet generator
+            gen = self._gen
+        try:
+            # While the window is not full
+            while self._window_size() < self._window:
+                # Get the next data packet
+                packet = next(gen)
+                # Transmit the packet
+                yield self._flow.env.process(self.transmit(packet))
+                # If we are in recovery mode
+                if recover:
+                    # Update the window (size)
+                    self._update_window()
+        # Once we have exhausted the packet generator
+        except StopIteration:
+            # If we exhausted the data packet generator
+            if not recover:
+                # Set the data packet generator to None
+                self._gen = None
+                # Wait for acknowledgements in the last window
+                yield self._flow.env.timeout(self._timeout)
+                # While there remain dropped packets
+                while not self._dropped.empty():
+                    # Retransmit as many dropped packets as possible
+                    yield self._flow.env.process(self.recover())
+                    # Wait for acknowledgements
+                    yield self._flow.env.timeout(self._timeout)
+                    # Update dropped packets
+                    self._update_dropped()
+                try:
+                    # Kill the window control process
+                    self._window_ctrl_proc.interrupt()
+                except RuntimeError:
+                    pass
+                # Mark this TCP algorithm as finished
+                self._finished.succeed()
+
+    def recover(self):
+        """Enter recovery mode.
+
+        :return: None
+        """
+        # Halve the window size
+        self._window /= 2
+        # Retransmit as many dropped packets as possible
+        yield self._flow.env.process(self.burst(recover=True))
+
+    def send(self):
+        """Send all data packets.
+
+        :return: None
+        """
+        # Start the window control process
+        self._window_ctrl_proc = self._flow.env.process(self._window_control())
+        # Yield a burst process
+        yield self._flow.env.process(self.burst())
+
+    def transmit(self, packet):
+        """Transmit a data packet to the host flow.
+
+        :param packet: the data packet to send
+        :type packet: :class:`resources.Packet`
+        :return: None
+        """
+        # Mark the packet as unacknowledged
+        self._unacknowledged[packet] = self._flow.env.now
+        # Transmit the packet
+        yield self._flow.env.process(self._flow.transmit(packet))
+
+
+class Reno(object):
+    """SimPy process implementing TCP Reno.
 
     :param flow: the flow that is using TCP Reno
     :type flow: :class:`Flow`
@@ -53,21 +318,21 @@ class Reno(object):
         # Next ID's expected by the destination host.  Last 4 are cached to
         # check for packet dropping (3 duplicate ACK's)
         self._next = deque(maxlen=4)
-        # Dropped packet queue
-
         # Wait for acknowledgement process
         self._wait_proc = None
         # Recovery mode flag
         self._recovery = False
+        # Finish event
+        self._finished = simpy.events.Event(self._flow.env)
 
     @property
-    def window(self):
-        """Transmission window size, in packets.
+    def finished(self):
+        """Transmission finished event.
 
-        :return: window size (packets)
-        :rtype: int
+        This event is only successful once all data packets have been
+        sent, and any dropped packets retransmitted successfully.
         """
-        return self._window
+        return self._finished
 
     @property
     def timeout(self):
@@ -78,21 +343,14 @@ class Reno(object):
         """
         return self._timeout
 
-    def _window_size(self):
-        """Calculate the transimssion window size.
+    @property
+    def window(self):
+        """Transmission window size, in packets.
 
-        Window size is equal to the difference in the ID's of the earliest
-        and latest packets sent, plus one.
+        :return: window size (packets)
+        :rtype: int
         """
-        # If there are no unacknowledged packets
-        if len(self._unacknowledged) == 0:
-            # The window is empty
-            return 0
-        # Sort the unacknowledged ID's
-        ids = sorted(packet.id for packet in self._unacknowledged.keys())
-        # Current window size = difference between the largest & smallest
-        # ID's + 1
-        return ids[-1] - ids[0] + 1
+        return self._window
 
     def _wait(self):
         """Wait for acknowledgements; time out if none are recieved."""
@@ -117,38 +375,21 @@ class Reno(object):
         except simpy.Interrupt:
             self._wait_proc = None
 
-    def transmit(self, packet):
-        """Transmit a data packet to the host flow.
+    def _window_size(self):
+        """Calculate the transimssion window size.
 
-        :param packet: the data packet to send
-        :type packet: :class:`resources.Packet`
-        :return: None
+        Window size is equal to the difference in the ID's of the earliest
+        and latest packets sent, plus one.
         """
-        # Mark the packet as unacknowledged
-        self._unacknowledged[packet] = self._flow.env.now
-        # Transmit the packet
-        yield self._flow.env.process(self._flow.transmit(packet))
-
-    def send(self):
-        """Send all data packets.
-
-        :return: None
-        """
-        try:
-            while True:
-                # While we have room in the window
-                while self._window_size() < self._window:
-                    # Get the next data packet
-                    packet = next(self._gen)
-                    # Transmit the data packet
-                    yield self._flow.env.process(self.transmit(packet))
-                # Wait for acknowledgements, or timeout
-                self._wait_proc = self._flow.env.process(self._wait())
-                yield self._wait_proc
-        except StopIteration:
-            # Wait for packets in the last window
-            self._wait_proc = self._flow.env.process(self._wait())
-            yield self._wait_proc
+        # If there are no unacknowledged packets
+        if len(self._unacknowledged) == 0:
+            # The window is empty
+            return 0
+        # Sort the unacknowledged ID's
+        ids = sorted(packet.id for packet in self._unacknowledged.keys())
+        # Current window size = difference between the largest & smallest
+        # ID's + 1
+        return ids[-1] - ids[0] + 1
 
     def acknowledge(self, ack):
         """Process an acknowledgement packet.
@@ -201,134 +442,34 @@ class Reno(object):
         if self._wait_proc is not None:
             self._wait_proc.interrupt()
 
+    def send(self):
+        """Send all data packets.
 
-class FAST(object):
-    """SimPy process implementing FAST TCP.
-
-    :param flow: the flow to link this TCP instance to
-    :type flow: :class:`Flow`
-    :param int window: initial window size (in packets)
-    :param int timeout: packet acknowledgement timeout (simulation time)
-    :param int alpha: desired number of enqueued packets at equilibrium
-    :param float gamma: window update weight
-    """
-
-    def __init__(self, flow, window, timeout, alpha, gamma=0.5):
-        # The flow running this TCP algorithm
-        self._flow = flow
-        # Window size (packets)
-        self._window = window
-        # Time after which packets are considered dropped
-        self._timeout = timeout
-        # Packets in buffer at equilibrium
-        self._alpha = alpha
-        # Window update weight
-        self._gamma = gamma
-        # Mean round trip time
-        self._mean_trip = float("inf")
-        # Minimum observed round trip time
-        self._min_trip = float("inf")
-        # Estimated queueing delay
-        self._delay = float("inf")
-        # Packet generator
-        self._gen = self._flow.generator()
-        # Hash table mapping unacknowledged packet -> departure time
-        self._unacknowledged = dict()
-        # Dropped packet (retransmission) queue
-        self._dropped = Queue()
-        # Next ID's expected by the destination host.  Last 4 are cached to
-        # check for packet dropping (3 duplicate ACK's)
-        self._next = deque(maxlen=4)
-        # Window updating process
-        self._window_ctrl_proc = None
-
-    @property
-    def window(self):
-        """Transmission window size, in bits.
-
-        :return: window size (bits)
-        :rtype: int
+        :return: None
         """
-        return self._window
-
-    @property
-    def timeout(self):
-        """The time after which packets are considered dropped.
-
-        :return: acknowledgement timeout (simulation time)
-        :rtype: int
-        """
-        return self._time
-
-    def _estimate(self, trip):
-        # Calculate weight for round trip mean update
-        eta = min(3.0 / self._window, 0.25)
-        # If the mean is unset
-        if self._mean_trip == float("inf"):
-            # Set the mean trip to the given value
-            self._mean_trip = trip
-        else:
-            # Update moving average of round trip mean
-            self._mean_trip = (1 - eta) * self._mean_trip + eta * trip
-
-        # Update minimum round trip time, if necessary
-        if trip < self._min_trip:
-            self._min_trip = trip
-
-        # Update estimated queueing delay
-        self._delay = self._mean_trip - self._min_trip
-
-    def _update_dropped(self):
-        # For each unacknowledged packet
-        for packet, time in list(self._unacknowledged.items())[:]:
-            # If it has timed out
-            if time <= self._flow.env.now - self._timeout:
-                # Mark it as dropped
-                self._dropped.put(packet)
-                # Remove it from the unacknowledged packets
-                del self._unacknowledged[packet]
-
-    def _update_window(self):
-        """Update the maximum window size."""
-        # Calculate the new window size, as directed by FAST TCP spec
-        window = (1 - self._gamma) * self._window + self._gamma * \
-            (self._window * self._min_trip / self._mean_trip + self._alpha)
-        # Update window size by at most doubling it
-        self._window = min(2 * self._window, window)
-
-    def _window_size(self):
-        """Calculate the transimssion window size.
-
-        Window size is equal to the difference in the ID's of the earliest
-        and latest packets sent, plus one.
-        """
-        # If there are no unacknowledged packets
-        if len(self._unacknowledged) == 0:
-            # The window is empty
-            return 0
-        # Sort the unacknowledged ID's
-        ids = sorted(packet.id for packet in self._unacknowledged.keys())
-        # Current window size = difference between the largest & smallest
-        # ID's + 1
-        return ids[-1] - ids[0] + 1
-
-    def _window_control(self):
-        """Periodically update the window size."""
         try:
             while True:
-                # Wait for acknowledgements
-                yield self._flow.env.timeout(self._timeout)
-                # Update dropped packets
-                self._update_dropped()
-                # If there exist dropped packets
-                if not self._dropped.empty():
-                    # Enter recovery mode (updates window size)
-                    yield self._flow.env.process(self.recover())
-                else:
-                    # Otherwise, just update the window size
-                    self._update_window()
-        except simpy.events.Interrupt:
-            pass
+                # While we have room in the window
+                while self._window_size() < self._window:
+                    # Get the next data packet
+                    packet = next(self._gen)
+                    # Transmit the data packet
+                    yield self._flow.env.process(self.transmit(packet))
+                # Wait for acknowledgements, or timeout
+                self._wait_proc = self._flow.env.process(self._wait())
+                yield self._wait_proc
+        except StopIteration:
+            # Wait for packets in the last window
+            self._wait_proc = self._flow.env.process(self._wait())
+            yield self._wait_proc
+            # If there remain unacknowledged packets
+            if len(self._unacknowledged) > 0:
+                # Make a generator for the dropped packets
+                self._gen = (p for p in list(self._unacknowledged.keys())[:])
+                # Resend all dropped packets
+                yield self._flow.env.process(self.send())
+            # Mark this TCP algorithm as finished
+            self._finished.succeed()
 
     def transmit(self, packet):
         """Transmit a data packet to the host flow.
@@ -342,112 +483,6 @@ class FAST(object):
         # Transmit the packet
         yield self._flow.env.process(self._flow.transmit(packet))
 
-    def burst(self, recover=False):
-        """Inject packets into the network.
-
-        If recover is True, then the packets are taken from the dropped
-        packet queue.
-
-        :param bool recover: flag for recovery mode
-        :return: None
-        """
-        # If we are in recovery mode
-        if recover:
-            # Take packets from the dropped packet queue, as long as there
-            # are packets to take.  If there are multiple simultaneous
-            # burst processes, each will take as many packets as they can
-            # consume before the queue is exhausted
-            gen = itertools.takewhile(
-                lambda _: self._dropped.qsize() >= 0,
-                (self._dropped.get_nowait() for i in range(
-                    self._dropped.qsize())))
-        else:
-            # Otherwise, take packets from the data packet generator
-            gen = self._gen
-        try:
-            # While the window is not full
-            while self._window_size() < self._window:
-                # Get the next data packet
-                packet = next(gen)
-                # Transmit the packet
-                yield self._flow.env.process(self.transmit(packet))
-                # If we are in recovery mode
-                if recover:
-                    # Update the window (size)
-                    self._update_window()
-        # Once we have exhausted the packet generator
-        except StopIteration:
-            # If we exhausted the data packet generator
-            if not recover:
-                # Set the data packet generator to None
-                self._gen = None
-                # While there remains dropped packets
-                while not self._dropped.empty():
-                    # Retransmit as many dropped packets as possible
-                    self.recover()
-                    # Wait for acknowledgements
-                    yield self._flow.env.timeout(self._timeout)
-                    # Update dropped packets
-                    self._update_dropped()
-                try:
-                    # Kill the window control process
-                    self._window_ctrl_proc.interrupt()
-                except RuntimeError:
-                    pass
-
-    def acknowledge(self, ack):
-        """Process an acknowledgement packet.
-
-        :param ack: the acknowledgement packet
-        :type ack: :class:`resources.ACK`
-        :return: None
-        """
-        # ID of the packet being acknowledged
-        pid = ack.id
-        # ID expected next by the destination host
-        expected = ack.data
-
-        # Push this into the deque (if the deque is full, this is
-        # equivalent to self._next.popleft() before appending)
-        self._next.append(expected)
-        # Get the unacknowledged packet
-        packet = next(filter(lambda p: p.id == pid, 
-                      self._unacknowledged.keys()))
-        # Calculate round trip time
-        rtt = self._flow.env.now - self._unacknowledged[packet]
-        # Mark packet as acknowledged
-        del self._unacknowledged[packet]
-        # Update mean round trip time & queueing delay
-        self._estimate(rtt)
-        # If we have 3 dropped ACK's
-        if self._next.count(self._next[0]) == self._next.maxlen:
-            # Enter recovery
-            yield self._flow.env.process(self.recover())
-        # If there are more packets to generate
-        if self._gen is not None:
-            # Try to inject packets into the network
-            yield self._flow.env.process(self.burst())
-
-    def recover(self):
-        """Enter recovery mode.
-
-        :return: None
-        """
-        # Halve the window size
-        self._window /= 2
-        # Retransmit as many dropped packets as possible
-        yield self._flow.env.process(self.burst(recover=True))
-
-    def send(self):
-        """Send all data packets.
-
-        :return: None
-        """
-        # Start the window control process
-        self._window_ctrl_proc = self._flow.env.process(self._window_control())
-        # Yield a burst process
-        yield self._flow.env.process(self.burst())
-
 
 class Flow(object):
     """SimPy process representing a flow.
@@ -456,9 +491,9 @@ class Flow(object):
     many packets as are necessary to send all of its data.  If data is
     None, a random, 8-bit number of packets are sent.  Every flow needs
     a TCP algorithm to be specified, from among the currently supported
-    TCP algorithms.  At the moment, the only allowed specifier is 
-    \"FAST\".  See :class:`FAST` for details on what tcp_params should
-    look like.
+    TCP algorithms.  At the moment, the only allowed specifiers are 
+    \"FAST\", and \"Reno\".  See :class:`FAST` or :class:`Reno` for 
+    details on what tcp_params should look like.
 
     :param simpy.Environment env: the simulation environment
     :param host: the source host of this flow
@@ -511,6 +546,16 @@ class Flow(object):
         return self._data
 
     @property
+    def finished(self):
+        """Transmission finished event.
+
+        This event is only successful once all data packets have been
+        sent, and any dropped packets retransmitted successfully.
+        """
+        return self._tcp.finished
+
+
+    @property
     def id(self):
         """The ID of this flow, assigned by its host.
 
@@ -518,6 +563,26 @@ class Flow(object):
         :rtype: int
         """
         return self._id
+
+    def acknowledge(self, ack):
+        """Receive an acknowledgement packet.
+
+        Acknowledgement packets are passed to the underlying TCP algorithm
+        to be handled.
+
+        :param ack: acknowledgement packet
+        :type ack: :class:`resources.ACK`
+        :return: None
+        """
+        logger.info("flow {}, {} acknowledges packet {} at time {}".format(
+            self._id, self._host.addr, ack.id, self.env.now))
+        # Send this acknowledgement to the TCP algorithm
+        yield self.env.process(self._tcp.acknowledge(ack))
+
+    def generate(self):
+        """Generate packets from this flow."""
+        yield self.env.timeout(self._delay)
+        yield self.env.process(self._tcp.send())
 
     def generator(self):
         """Create a packet generator.
@@ -543,11 +608,6 @@ class Flow(object):
 
         return g
 
-    def generate(self):
-        """Generate packets from this flow."""
-        yield self.env.timeout(self._delay)
-        yield self.env.process(self._tcp.send())
-
     def transmit(self, packet):
         """Transmit an outbound packet to localhost.
         
@@ -555,27 +615,6 @@ class Flow(object):
         :type packet: :class:`resources.Packet`
         """
         yield self.env.process(self._host.receive(packet))
-
-    def acknowledge(self, ack):
-        """Receive an acknowledgement packet.
-
-        If an acknowledgement is received from a packet in the previous
-        window, this generator waits <timeout> units of simulation time
-        until declaring any unacknowledged packets dropped, and
-        retransmitting them.  Once finished transmitting any dropped
-        packets, packet generation is reactivated.  If an acknowledgement
-        is received from a retransmitted packet (i.e., outside the
-        previous window), it is marked as acknowledged, but does not
-        trigger a timeout or packet generation.
-
-        :param ack: acknowledgement packet
-        :type ack: :class:`resources.ACK`
-        :return: None
-        """
-        logger.info("flow {}, {} acknowledges packet {} at time {}".format(
-            self._id, self._host.addr, ack.id, self.env.now))
-        # Send this acknowledgement to the TCP algorithm
-        yield self.env.process(self._tcp.acknowledge(ack))
 
 
 class Host(object):
@@ -659,6 +698,16 @@ class Host(object):
         # Transmit the dequeued packet
         yield self.res.env.process(self.transmit(packet))
 
+    def register(self, flow):
+        """Register a new flow on this host, and return the flow ID.
+
+        :param flow: a new flow to register with this host
+        :type flow: :class:`Flow`
+        :return: None
+        """
+        self._flows.append(flow)
+        return len(self._flows) - 1
+
     def transmit(self, packet):
         """Transmit a packet.
 
@@ -685,70 +734,6 @@ class Host(object):
             # Send an inbound ACK to its destination flow
             yield self.res.env.process(
                 self._flows[packet.flow].acknowledge(packet))
-
-    def register(self, flow):
-        """Register a new flow on this host, and return the flow ID.
-
-        :param flow: a new flow to register with this host
-        :type flow: :class:`Flow`
-        :return: None
-        """
-        self._flows.append(flow)
-        return len(self._flows) - 1
-
-
-class Transport(object):
-    """This class is a directional transport handler for a link.
-
-    Direction should be one of :data:`resources.UP` or :data:`resources.DOWN`
-
-    :param link: the underlying link
-    :type link: :class:`Link`
-    :param int direction: packet transmission direction
-    """
-
-    def __init__(self, link, direction):
-        self._link = link
-        self._direction = direction
-
-    def __eq__(self, other):
-        return self._link == other.link and self._direction == other.direction
-
-    def __hash__(self):
-        return self._link.__hash__() * (-1)**(self._direction)
-
-    @property
-    def link(self):
-        """The link that owns this transport handler."""
-        return self._link
-
-    @property
-    def direction(self):
-        """The direction of this transport handler."""
-        return self._direction
-
-    @property
-    def cost(self):
-        """Directional cost of the underlying link."""
-        return self._link.cost(self._direction)
-
-    def send(self, packet):
-        """Send a packet across the link.
-
-        :param packet: the packet to send
-        :type packet: :class:`resources.Packet`
-        :return: :func:`Link.receive` generating method
-        :rtype: generator
-        """
-        return self._link.receive(self._direction, packet)
-
-    def reverse(self):
-        """Return a transport handler in the opposite direction.
-
-        :return: transport handler
-        :rtype: :class:`Transport`
-        """
-        return Transport(self.link, 1 - self.direction)
 
 
 class Link(object):
@@ -787,6 +772,22 @@ class Link(object):
         """A list of connected endpoints (up to 1 per direction)"""
         return self._endpoints
 
+    def connect(self, A, B):
+        """Connect two network components via this link.
+
+        :param A: the first new endpoint of this link
+        :type A: :class:`Host`, or :class:`Router` 
+        :param B: the second new endpoint of this link
+        :type B: :class:`Host`, or :class:`Router` 
+        :return: None
+        """
+        # Store the endpoints
+        self._endpoints = [A, B]
+        # Connect the "upload" (0 -> 1) hander
+        self._endpoints[0].connect(self._up)
+        # Connect the "download" (1 -> 0) handler 
+        self._endpoints[1].connect(self._down)
+
     def cost(self, direction):
         """Return the cost of a direction on this link.
 
@@ -803,22 +804,6 @@ class Link(object):
         except ValueError:
             # Available capacity was 0, so return infinite cost
             return float("inf")
-
-    def connect(self, A, B):
-        """Connect two network components via this link.
-
-        :param A: the first new endpoint of this link
-        :type A: :class:`Host`, or :class:`Router` 
-        :param B: the second new endpoint of this link
-        :type B: :class:`Host`, or :class:`Router` 
-        :return: None
-        """
-        # Store the endpoints
-        self._endpoints = [A, B]
-        # Connect the "upload" (0 -> 1) hander
-        self._endpoints[0].connect(self._up)
-        # Connect the "download" (1 -> 0) handler 
-        self._endpoints[1].connect(self._down)
 
     def disconnect(self):
         """Disconnect a link from its two endpoints.
@@ -920,87 +905,31 @@ class Router(object):
         """
         return self._addr
 
-    def connect(self, transport):
-        """Connect an outbound link.
+    def _broadcast_packet(self, host, cost, path, port):
+        """Broadcast a routing packet."""
 
-        :param transport: transport handler
-        :type transport: :class:`Transport`
-        :return: None
-        """
-        # Connect a new transport handler to a new "port"
-        self._links.append(transport)
+        # create a new routing packet for each outbound link that's
+        # not a host and adjust the cost for each link
+        for transport in self._links:
+            # don't send routing packets to hosts or to the router
+            # that sent the recently received packet.
+            if Host in map(type, transport.link.endpoints) or \
+                transport == port:
+                continue
 
-    def disconnect(self, transport):
-        """Disconnect a link, if it exists.
-
-        :param transport: the transport handler to disconnect
-        :type transport: :class:`Transport`
-        :return: None
-        """
-        try:
-            # Disconnect the given transport handler
-            self._links.remove(transport)
-        except ValueError:
-            # If it doesn't exist, do nothing
-            pass
-        # Remove any routing entries using the given transport handler
-        self._routing_table = \
-            {k:v for k, v in self._routing_table if v[0] != transport}
-        self._update_table = \
-            {k:v for k, v in self._update_table if v[0] != transport}
-
-    def _route(self, address):
-        """Return the correct transport handler for the given address.
-
-        :param int address: the destination address
-        :return: the transport handler selected by the routing policy
-        :rtype: function
-        """
-        return self._routing_table[address][0]
-
-    def transmit(self, packet, transport):
-        """Transmit an outbound packet.        
-       
-        :param packet: the outbound packet     
-        :type packet: :class:`resources.Packet`  
-        :param transport: the outbound transport handler
-        :type transport: :class:`resources.Transport`      
-        :return: None      
-        """              
-        logger.info("router {} transmitting packet {}, {}, {} at time "
-                    "{}".format(self.addr, packet.src, packet.flow, packet.id,
-                                self.res.env.now))
-
-        # Send the packet      
-        yield self.res.env.process(transport.send(packet))
-
-    def receive(self, packet):
-        """Receive a packet, and yield a transmission event.
-
-        :param packet:
-        :type packet: :class:`resources.Packet`
-        :return: None
-        """
-        logger.info("router {} received packet {}, {}, {} at time {}".format(
-            self.addr, packet.src, packet.flow, packet.id, self.res.env.now))
-
-        # Push another packet through the queue
-        packet = yield self.res.receive(packet)
-
-        
-        # first determine what type of packet it is, then process it 
-        if isinstance(packet, resources.Routing):
-            yield self.res.env.process(self._handle_routing_packet(packet))
-        #handle data packet
-        else:
-            #get destination address from packet
-            dst_addr = packet.dest
-            #look up outbound link using the routing table
-            transport = self._route(dst_addr)
-            #tranmit packet
-            yield self.res.env.process(self.transmit(packet, transport))
+            # update packet path and cost
+            new_path = path + [self._addr]
+            new_cost = cost + transport.cost
+            # create reference to outbound port for this router on the 
+            # router receiving the packet 
+            new_port = transport.reverse()
+            # create new packet
+            new_pkt = resources.Routing((host, new_cost, new_path, new_port))
+            # send the newly created packet
+            yield self.res.env.process(self.transmit(new_pkt, transport))
 
     def _handle_routing_packet(self, packet):
+        """Handle a routing or finish packet."""
         if type(packet) == resources.Finish:
             # retrieve trasnport object connecting routers
             transport = packet.data
@@ -1058,28 +987,14 @@ class Router(object):
             self._finish_table = {k: False for k in self._finish_table.keys()}
             self._update_table = dict()
 
-    def _broadcast_packet(self, host, cost, path, port):
-        """Broadcast a routing packet."""
+    def _route(self, address):
+        """Return the correct transport handler for the given address.
 
-        # create a new routing packet for each outbound link that's
-        # not a host and adjust the cost for each link
-        for transport in self._links:
-            # don't send routing packets to hosts or to the router
-            # that sent the recently received packet.
-            if Host in map(type, transport.link.endpoints) or \
-                transport == port:
-                continue
-
-            # update packet path and cost
-            new_path = path + [self._addr]
-            new_cost = cost + transport.cost
-            # create reference to outbound port for this router on the 
-            # router receiving the packet 
-            new_port = transport.reverse()
-            # create new packet
-            new_pkt = resources.Routing((host, new_cost, new_path, new_port))
-            # send the newly created packet
-            yield self.res.env.process(self.transmit(new_pkt, transport))
+        :param int address: the destination address
+        :return: the transport handler selected by the routing policy
+        :rtype: function
+        """
+        return self._routing_table[address][0]
 
     def begin(self):
         """Periodically update routing tables with Bellman-Ford.
@@ -1114,6 +1029,131 @@ class Router(object):
         except simpy.events.Interrupt:
             pass
 
+    def connect(self, transport):
+        """Connect an outbound link.
+
+        :param transport: transport handler
+        :type transport: :class:`Transport`
+        :return: None
+        """
+        # Connect a new transport handler to a new "port"
+        self._links.append(transport)
+
+    def disconnect(self, transport):
+        """Disconnect a link, if it exists.
+
+        :param transport: the transport handler to disconnect
+        :type transport: :class:`Transport`
+        :return: None
+        """
+        try:
+            # Disconnect the given transport handler
+            self._links.remove(transport)
+        except ValueError:
+            # If it doesn't exist, do nothing
+            pass
+        # Remove any routing entries using the given transport handler
+        self._routing_table = \
+            {k:v for k, v in self._routing_table if v[0] != transport}
+        self._update_table = \
+            {k:v for k, v in self._update_table if v[0] != transport}
+
+    def receive(self, packet):
+        """Receive a packet, and yield a transmission event.
+
+        :param packet:
+        :type packet: :class:`resources.Packet`
+        :return: None
+        """
+        logger.info("router {} received packet {}, {}, {} at time {}".format(
+            self.addr, packet.src, packet.flow, packet.id, self.res.env.now))
+
+        # Push another packet through the queue
+        packet = yield self.res.receive(packet)
+
+        
+        # first determine what type of packet it is, then process it 
+        if isinstance(packet, resources.Routing):
+            yield self.res.env.process(self._handle_routing_packet(packet))
+        #handle data packet
+        else:
+            #get destination address from packet
+            dst_addr = packet.dest
+            #look up outbound link using the routing table
+            transport = self._route(dst_addr)
+            #tranmit packet
+            yield self.res.env.process(self.transmit(packet, transport))
+
+    def transmit(self, packet, transport):
+        """Transmit an outbound packet.        
+       
+        :param packet: the outbound packet     
+        :type packet: :class:`resources.Packet`  
+        :param transport: the outbound transport handler
+        :type transport: :class:`resources.Transport`      
+        :return: None      
+        """              
+        logger.info("router {} transmitting packet {}, {}, {} at time "
+                    "{}".format(self.addr, packet.src, packet.flow, packet.id,
+                                self.res.env.now))
+
+        # Send the packet      
+        yield self.res.env.process(transport.send(packet))
+
 #TODO:
 #edit docstrings/style 
 #edit logger statements
+
+
+class Transport(object):
+    """This class is a directional transport handler for a link.
+
+    Direction should be one of :data:`resources.UP` or :data:`resources.DOWN`
+
+    :param link: the underlying link
+    :type link: :class:`Link`
+    :param int direction: packet transmission direction
+    """
+
+    def __init__(self, link, direction):
+        self._link = link
+        self._direction = direction
+
+    def __eq__(self, other):
+        return self._link == other.link and self._direction == other.direction
+
+    def __hash__(self):
+        return self._link.__hash__() * (-1)**(self._direction)
+
+    @property
+    def cost(self):
+        """Directional cost of the underlying link."""
+        return self._link.cost(self._direction)
+
+    @property
+    def direction(self):
+        """The direction of this transport handler."""
+        return self._direction
+
+    @property
+    def link(self):
+        """The link that owns this transport handler."""
+        return self._link
+
+    def reverse(self):
+        """Return a transport handler in the opposite direction.
+
+        :return: transport handler
+        :rtype: :class:`Transport`
+        """
+        return Transport(self.link, 1 - self.direction)
+
+    def send(self, packet):
+        """Send a packet across the link.
+
+        :param packet: the packet to send
+        :type packet: :class:`resources.Packet`
+        :return: :func:`Link.receive` generating method
+        :rtype: generator
+        """
+        return self._link.receive(self._direction, packet)

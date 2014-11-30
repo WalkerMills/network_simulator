@@ -197,7 +197,8 @@ class FlowDialog(InputDialog):
     different TCP algorithms take different parameters, the last entry
     field takes a comma-separated list of values.  The first value must
     be a valid TCP algorithm specifier. See :class:`process.Flow`, and
-    :class:`process.FAST` for more details on the input values.
+    :class:`process.FAST` or :class:`process.Reno` for more details on
+    the input values.
 
     :param parent: parent of this widget
     :type parent: tkinter.Widget
@@ -207,7 +208,7 @@ class FlowDialog(InputDialog):
     labels = ["Data", "Initial delay", "Window", "Timeout", "TCP"]
     """Flow positional parameters (label names)."""
 
-    types = [int, int, int, int, {"FAST": [int, float]}]
+    types = [int, int, int, int, {"FAST": [int, float], "Reno": []}]
     """Input types."""
 
     def validate(self):
@@ -293,6 +294,7 @@ class LinkDialog(InputDialog):
         """
         return all(map(lambda i: self._get_entry(i, self.types[i]) >= 0,
                        range(len(self.labels))))
+
 
 class NetworkInput(tkinter.Frame):
     """This class implements a GUI to draw a network configuration.
