@@ -567,11 +567,11 @@ class Flow(object):
         self._id = self._host.register(self)
 
         # create getter for data received
-        self.env.register("flow_received{}{}".format(self._id, self._host.addr),
+        self.env.register("flow_received,{},{}".format(self._host.addr, self._id),
                               lambda: self._received)
         # create getter for data transmitted
-        self.env.register("flow_transmitted{}{}".format(
-            self._id, self._host.addr), lambda: self._transmitted)
+        self.env.register("flow_transmitted,{},{}".format(
+            self._host.addr, self._id), lambda: self._transmitted)
 
     @property
     def dest(self):
@@ -677,7 +677,7 @@ class Flow(object):
         # make sure list isn't empty before creating getter
         if not self._times:
             # create getter for packet roundtrip ties
-            self.env.register("flow{}{}_rtt".format(self._id, self._host.addr), 
+            self.env.register("flow_rtt,{},{}".format(self._host.addr, self._id), 
                               lambda: sum(self._times) / len(self._times))
 
         # Get departure time of packet
@@ -693,8 +693,6 @@ class Flow(object):
             self._last_arrival = self.env.now
         # append packet to list of RTT's
         self._times.append(rtt)
-
-
 
 
 class Host(object):
@@ -723,10 +721,10 @@ class Host(object):
         self._received = 0
 
         # create getter for transmitted data
-        self.res.env.register("host_transmitted{}".format(addr),
+        self.res.env.register("host_transmitted,{}".format(addr),
                               lambda: self._transmitted)
         # create getter for received data
-        self.res.env.register("host_received{}".format(addr),
+        self.res.env.register("host_received,{}".format(addr),
                               lambda: self._received)
 
     @property
@@ -865,13 +863,13 @@ class Link(object):
         self._transmitted = 0
 
         # create getter for buffer occupancy
-        self.res.env.register("link_fill{}".format(addr), 
+        self.res.env.register("link_fill,{}".format(addr), 
                               lambda: (self.res.buffered))
         # create getter for dropped packets
-        self.res.env.register("link_dropped{}".format(addr), 
+        self.res.env.register("link_dropped,{}".format(addr), 
                               lambda: self.res.dropped)
         # create getter for transmitted data
-        self.res.env.register("link_transmitted{}".format(addr),
+        self.res.env.register("link_transmitted,{}".format(addr),
                               lambda: self._transmitted)
 
     @property

@@ -7,9 +7,11 @@
 import enum
 import heapq
 import itertools
+import numpy as np
 import simpy
-
 import process
+
+from matplotlib import pyplot as plt
 
 @enum.unique
 class Case(enum.Enum):
@@ -190,3 +192,77 @@ class MonitoredEnvironment(simpy.Environment):
             # The event has failed, check if it is defused.
             # Raise the value if not.
             raise event._value
+
+def run(adjacenct, tcp, until):
+    """Runs the simulation with the given parameters. And displays
+    graphs for monitored variables
+
+    :param adjacent: adjacency lists of links & flows defining a network
+    :type adjacent: ([((str, str), (int, int, int))], 
+        [((str, str), ((int, int), (str, list)))]), or :class:`test.Case`
+    :param str tcp: TCP specifier. Used iff adjacent is a :class:`test.Case`
+    :param until_: time or event to run the simulation until
+    :type until_: int or ``simpy.events.Event``
+    """
+    sorted_data = dict()
+
+    n = network.Network(adjacency, tcp)
+    data = n.simulate(until)
+
+    for key in data:
+        separated = key.split(',')
+        title = separated[0]
+        # creates new dictionary of tuples which contain 
+        # data points w/ unique host-flow identifier
+        sorted_data[title].append((', '.join(separated[1:]), data[key]))
+
+    for key, value in data:
+        if key == "flow_received":
+            graph(value, key, "Mbps", True, 1000000)
+
+        elif title == "flow_transmitted":
+            graph(value, key, "Mbps", True, 1000000)
+
+        elif title == "flow_rtt":
+            graph(value, key, "ms", False, 1)
+
+        elif title == "host_transmitted":
+            graph(value, key, "Mbps", True, 1000000)
+
+        elif title == "host_received":
+            graph(value, key, "ms", True, 1000000)
+
+        elif title == "link_fill":
+            graph(value, key, "packets", False, 1)
+
+        elif title == "link_dropped":
+            graph(value, key, "packets", False, 1)
+
+        elif title == "link_transmitted":
+            graph(value, key, "Mbps", True, 1000000)
+
+def graph(data, title, y_label, rate_flag, scaling_factor):
+    """
+    """
+    
+    for datset in data:
+        arr = np.asarray(dataset[1])
+        x, y = arr.transpose()
+        y = [value / scaling_factor for value in y]
+
+        if rate_flag:
+            # calculate derivative
+            for i in len(y) - 1:
+                d[i] = (y[i+1] - y[i]) / (x[i+1] - x[i])
+            y = d
+
+        plt.plot(x,y, "label = flow{}".format(dataset[0]))
+
+    plt.set_title(title)
+    plt.xlabel("simulation time, ms")
+    plt.ylabel(y_label)
+    plt.show()
+
+    
+
+
