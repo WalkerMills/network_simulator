@@ -68,7 +68,7 @@ class TestCase(object):
 
     tcp_parameters = {
         Case.zero: {'FAST': [[1, 50, 384000]], 'Reno': [[1, 50]]}, 
-        Case.one: {'FAST': [[1, 100, 384000]], 'Reno': [[1, 100]]},
+        Case.one: {'FAST': [[1, 120, 384000]], 'Reno': [[1, 120]]},
         Case.two: {'FAST': itertools.repeat([1, 200, 768000], 3), 
                    'Reno': itertools.repeat([1, 200], 3)}
     }
@@ -105,97 +105,6 @@ class TestCase(object):
         # Return adjacency lists of edges & initialized flows
         return cls.adjacencies[case][0], flows
 
-
-class MonitoredEnvironment(simpy.Environment):
-    """SimPy environment with monitoring.
-
-    Processes may register identifiers, along with a getter (function)
-    to be periodically called, and its return value recorded.  After the
-    last event at a given time are processed, all monitored values are
-    updated.  However, monitored values are only updated after an event
-    occurs, i.e., if no events occur at a given time, no update is
-    performed.
-
-    :param int initial_time: simulation time to start at
-    """
-
-    def __init__(self, initial_time=0):
-        super(MonitoredEnvironment, self).__init__(initial_time)
-
-        # Dictionary mapping identifier -> getter
-        self._getters = dict()
-        # Dictionary mapping identifier -> [(time, monitored value)]
-        self._monitored = dict()
-
-    def monitored(self):
-        """The timestamped values of all monitored attributes.
-
-        :return: monitored attribute dict
-        :rtype: {str: [(int, object)]}
-        """
-        return self._monitored
-
-    def values(self, name):
-        """The values for the given identifier.
-
-        :param str name: the identifier to retrieve values for
-        :return: timestamped values list
-        :rtype: [(int, object)]
-        """
-        return self._monitored[name]
-
-    def _update(self):
-        """Update all monitored values."""
-        # For each identifier
-        for name, getter in self._getters.items():
-            # Append a new timestamped value to the list 
-            self._monitored[name].append((self._now, getter()))
-
-    def register(self, name, getter):
-        """Register a new identifier.
-
-        Raise a KeyError if the given identifier already exists.
-
-        :param str name: the identifier
-        :param function getter: a function to update the monitored value with
-        :return: None
-        """
-        # Don't accept duplicate identifiers
-        if name in self._getters.keys():
-            raise KeyError("already monitoring {}".format(name))
-
-        # Add this identifier to the getter & values dictionaries
-        self._getters[name] = getter
-        self._monitored[name] = []
-
-    def step(self):
-        """Process the next event, and update the monitored values.
-
-        Raise an :exc:`simpy.core.EmptySchedule` if no further events
-        are available.
-
-        :return: None
-        """
-        try:
-            self._now, _, _, event = heapq.heappop(self._queue)
-        except IndexError:
-            raise simpy.core.EmptySchedule()
-
-        # Process callbacks of the event.
-        for callback in event.callbacks:
-            callback(event)
-        event.callbacks = None
-
-        # If the next event is in the future, or nonexistent 
-        if self.peek() > self._now:
-            # Update the monitored values
-            self._update()
-
-        if not event.ok and not hasattr(event, "defused"):
-            # The event has failed, check if it is defused.
-            # Raise the value if not.
-            raise event._value
-
 def run(adjacent, tcp="FAST", until=None):
     """Runs the simulation with the given parameters. And displays
     graphs for monitored variables
@@ -212,59 +121,66 @@ def run(adjacent, tcp="FAST", until=None):
     n = network.Network(adjacent, tcp)
     data = n.simulate(until)
 
-    for key, value in data:
+    for key, value in data.items():
         separated = key.split(',')
         title = separated[0]
+        if title not in sorted_data.keys():
+            sorted_data[title] = list()
         # creates new dictionary of tuples which contain 
         # data points w/ unique host-flow identifier
         sorted_data[title].append((', '.join(separated[1:]), value))
 
-    for key, value in sorted_data:
-        if key == "flow_received":
+    for key, value in sorted_data.items():
+        if key == "Flow received":
             graph(value, key, "Mbps", True, 1000000)
 
-        elif title == "flow_transmitted":
+        elif title == "Flow transmitted":
             graph(value, key, "Mbps", True, 1000000)
 
-        elif title == "flow_rtt":
-            graph(value, key, "ms", False, 1)
+        elif title == "Flow rtt":
+            graph(value, key, "ms")
 
-        elif title == "host_transmitted":
+        elif title == "Host transmitted":
             graph(value, key, "Mbps", True, 1000000)
 
-        elif title == "host_received":
+        elif title == "Host received":
             graph(value, key, "ms", True, 1000000)
 
-        elif title == "link_fill":
-            graph(value, key, "packets", False, 1)
+        elif title == "Link fill":
+            graph(value, key, "packets")
 
-        elif title == "link_dropped":
-            graph(value, key, "packets", False, 1)
+        elif title == "Link dropped":
+            graph(value, key, "packets")
 
-        elif title == "link_transmitted":
+        elif title == "Link transmitted":
             graph(value, key, "Mbps", True, 1000000)
 
-def graph(data, title, y_label, rate_flag, scaling_factor):
+    return data
+
+def graph(data, title, y_label, derive=False, scaling=1):
     """
     """
     
-    for datset in data:
-        arr = np.asarray(dataset[1])
-        x, y = arr.transpose()
-        y = [value / scaling_factor for value in y]
+    fig = plt.figure()
+    fig.suptitle(title)
+    plt.xlabel("simulation time (ms)")
+    plt.ylabel(y_label)
 
-        if rate_flag:
+    for dataset in data:
+        arr = np.asarray(dataset[1])
+        x, y = np.transpose(arr)
+        y = [float(value) / float(scaling) for value in y]
+
+        if derive:
+            d = np.empty(len(y))
             # calculate derivative
-            for i in len(y) - 1:
-                d[i] = (y[i+1] - y[i]) / (x[i+1] - x[i])
+            for i in range(len(y) - 1):
+                d[i] = float(y[i+1] - y[i]) / float(x[i+1] - x[i])
             y = d
 
-        plt.plot(x,y, "label = flow{}".format(dataset[0]))
+        plt.plot(x, y, label="flow{}".format(dataset[0]))
 
     # may need to insert legend here
-    plt.set_title(title)
-    plt.xlabel("simulation time, ms")
-    plt.ylabel(y_label)
     plt.show()
 
     

@@ -9,6 +9,7 @@ import simpy
 
 import gui
 import process
+import resources
 import test
 
 logging.basicConfig(level=logging.INFO)
@@ -47,7 +48,7 @@ class Network(object):
 
     def __init__(self, adjacent=None, tcp='FAST'):
         # Simulation environment
-        self.env = test.MonitoredEnvironment()
+        self.env = resources.MonitoredEnvironment()
         # Table of hosts in this network
         self._hosts = dict()
         # Table of routers in this network
@@ -160,9 +161,12 @@ class Network(object):
                                         [f.finished for f in self._flows])
         # Run the simulation
         self.env.run(until=until_)
+        # check link fill
+        # for l in self._links:
+        #     print(l.res._fill_cnt)
         # Retrieve monitored values
         values = self.env.monitored()
         # Reset the environment
-        self.env = test.MonitoredEnvironment()
+        self.env = resources.MonitoredEnvironment()
         # Return the monitored values
         return values

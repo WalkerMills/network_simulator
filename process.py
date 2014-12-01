@@ -132,6 +132,8 @@ class FAST(object):
             (self._window * self._min_trip / self._mean_trip + self._alpha)
         # Update window size by at most doubling it
         self._window = min(2 * self._window, window)
+        if self._window == 0:
+            self._window = 1
 
     def _window_control(self):
         """Periodically update the window size."""
@@ -567,10 +569,11 @@ class Flow(object):
         self._id = self._host.register(self)
 
         # create getter for data received
-        self.env.register("flow_received,{},{}".format(self._host.addr, self._id),
-                              lambda: self._received)
+        self.env.register(
+            "Flow received,{},{}".format(self._host.addr, self._id),
+            lambda: self._received)
         # create getter for data transmitted
-        self.env.register("flow_transmitted,{},{}".format(
+        self.env.register("Flow transmitted,{},{}".format(
             self._host.addr, self._id), lambda: self._transmitted)
 
     @property
@@ -609,6 +612,31 @@ class Flow(object):
         :rtype: int
         """
         return self._id
+
+    def _update_rtt(self, pid):
+        """Update list of packet RTT's."""
+        # make sure list isn't empty before creating getter
+        if not self._times:
+            # create getter for packet roundtrip ties
+            self.env.register(
+                "Round trip times,{},{}".format(self._host.addr, self._id), 
+                lambda: sum(self._times) / len(self._times))
+
+        # Get departure time of packet
+        depart = self._tcp.get_departure(pid)
+        if depart is None:
+            return
+        # Calcualte roundtrip time of packet
+        rtt = self.env.now - depart
+
+        # if this is the first packet in a new timestep,
+        if self.env.now  > self._last_arrival:
+            # reset list of rtt's
+            self._times = list()
+            # update latest arrival time
+            self._last_arrival = self.env.now
+        # append packet to list of RTT's
+        self._times.append(rtt)
 
     def acknowledge(self, ack):
         """Receive an acknowledgement packet.
@@ -671,29 +699,6 @@ class Flow(object):
 
         yield self.env.process(self._host.receive(packet))
 
-    def _update_rtt(self, pid):
-        """Update list of packet RTT's.
-        """
-        # make sure list isn't empty before creating getter
-        if not self._times:
-            # create getter for packet roundtrip ties
-            self.env.register("flow_rtt,{},{}".format(self._host.addr, self._id), 
-                              lambda: sum(self._times) / len(self._times))
-
-        # Get departure time of packet
-        depart = self._tcp.get_departure(pid)
-        # Calcualte roundtrip time of packet
-        rtt = self.env.now - depart
-
-        # if this is the first packet in a new timestep,
-        if self.env.now  > self._last_arrival:
-            # reset list of rtt's
-            self._times = list()
-            # update latest arrival time
-            self._last_arrival = self.env.now
-        # append packet to list of RTT's
-        self._times.append(rtt)
-
 
 class Host(object):
     """SimPy process representing a host.
@@ -721,10 +726,10 @@ class Host(object):
         self._received = 0
 
         # create getter for transmitted data
-        self.res.env.register("host_transmitted,{}".format(addr),
+        self.res.env.register("Host transmitted,{}".format(addr),
                               lambda: self._transmitted)
         # create getter for received data
-        self.res.env.register("host_received,{}".format(addr),
+        self.res.env.register("Host received,{}".format(addr),
                               lambda: self._received)
 
     @property
@@ -820,7 +825,7 @@ class Host(object):
                                      packet.id, self.res.env.now))
             
             # update bits transmitted by host
-            self._received += packet.size
+            self._transmitted += packet.size
 
             # Transmit an outbound packet
             yield self.res.env.process(self._transport.send(packet))
@@ -847,30 +852,43 @@ class Link(object):
     """
 
     def __init__(self, env, capacity, size, delay, addr):
-        # Initialize link resource
-        self.res = resources.LinkResource(env, capacity, size)
+        # Initialize link buffers
+        self.res = resources.LinkBuffer(env, size)
+        # Link capacity (bps)
+        self._capacity = capacity
         # Link delay (simulation time)
         self._delay = delay
         # link address
         self._addr = addr
+
         # Endpoints for each direction
         self._endpoints = [None, None]
         # "Upload" handler
         self._up = Transport(self, resources.UP)
         # "Download" handler
         self._down = Transport(self, resources.DOWN)
+        # Link traffic (bps)
+        self._traffic = [0, 0]
         # Total number of bits transmitted by link
         self._transmitted = 0
+        # Buffer flushing processes
+        # self._flush_proc = (self.res.env.process(self._flush(resources.UP)),
+        #                     self.res.env.process(self._flush(resources.DOWN)))
 
         # create getter for buffer occupancy
-        self.res.env.register("link_fill,{}".format(addr), 
+        self.res.env.register("Link fill,{}".format(addr), 
                               lambda: (self.res.buffered))
         # create getter for dropped packets
-        self.res.env.register("link_dropped,{}".format(addr), 
+        self.res.env.register("Dropped packets,{}".format(addr), 
                               lambda: self.res.dropped)
         # create getter for transmitted data
-        self.res.env.register("link_transmitted,{}".format(addr),
+        self.res.env.register("Link transmitted,{}".format(addr),
                               lambda: self._transmitted)
+
+    @property
+    def capacity(self):
+        """The maximum bitrate of the link in bps."""
+        return self._capacity
 
     @property
     def delay(self):
@@ -881,6 +899,76 @@ class Link(object):
     def endpoints(self):
         """A list of connected endpoints (up to 1 per direction)"""
         return self._endpoints
+
+    def _available(self, direction):
+        """The available link capacity in the given direction.
+
+        :param int direction: link direction
+        :return: directional traffic (bps)
+        :rtype: int
+        """
+        return self._capacity - self._traffic[direction]
+
+    def _flush(self, direction):
+        """Send as many packets as possible from the buffers."""
+        while True:
+            yield self.res.env.timeout(1)
+            # Initialize packet list
+            flushed = list()
+            # While there are enqueued packets
+            while len(self.res._queues[direction]) > 0:
+                # Dequeue a packet
+                packet = self.res.dequeue(direction)
+                # If the link isn't busy
+                if packet.size <= self._available(direction):
+                    # Flush another packet
+                    flushed.append(packet)
+                    # Increment link traffic
+                    self._update_traffic(direction, packet.size)
+                else:
+                    # Requeue the packet & stop flushing
+                    self._queues[direction].appendleft(packet)
+                    break
+            yield self.res.env.process(self._transmit(direction, flushed))
+
+    def _transmit(self, direction, packet):
+        """Transmit a packet across the link in a given direction.
+
+        This generating function yields a transmission process for each
+        packet given
+
+        :param int direction: the direction to transport the packet
+        :param packet: a packet to transmit
+        :type packet: :class:`resources.Packet`
+        :return: None
+        """
+        logger.info("transmitting packet {}, {}, {} at time {}".format(
+            packet.src, packet.flow, packet.id, self.res.env.now))
+        # Update total bits transmitted by link
+        self._transmitted += packet.size
+        # Increment link traffic
+        self._update_traffic(direction, packet.size)
+        # Transmit packet after waiting, as if sending the packet
+        # across a physical link
+        yield simpy.util.start_delayed(self.res.env,
+            self._endpoints[direction].receive(packet), self._delay)
+        # Decrement directional traffic
+        self._update_traffic(direction, -packet.size)
+
+    def _update_traffic(self, direction, delta):
+        """Update the link traffic in a given direction.
+
+        Negative delta is equivalent to decreasing traffic.
+
+        :param int direction: link direction
+        :param int delta: change in directional traffic (bps)
+        :return: None
+        """
+        # Check for valid value
+        if delta < 0 and self._traffic[direction] < abs(delta):
+            raise ValueError("not enough traffic")
+        # Update traffic
+        self._traffic[direction] += delta
 
     def connect(self, A, B):
         """Connect two network components via this link.
@@ -910,7 +998,8 @@ class Link(object):
         """
         try:
             return self._delay * resources.Packet.size * \
-                (1 + self.res.fill(direction)) / self.res.available(direction)
+                (1 + self.res.fill(direction)) / \
+                math.log(self._available(direction))
         except ValueError:
             # Available capacity was 0, so return infinite cost
             return float("inf")
@@ -931,9 +1020,7 @@ class Link(object):
         """Receive a packet to transmit in a given direction.
 
         New packets are appended to one of the link's internal directional
-        buffer, and trigger the dequeueing of a packet from that buffer.
-        The dequeued packet is then sent across the link.  All link
-        buffers are drop-tail.
+        buffer.  All link buffers are drop-tail.
 
         :param int direction: the direction to transport the packet
         :param packet: the packet to send through the link
@@ -942,35 +1029,14 @@ class Link(object):
         """
         logger.info("link received packet {}, {}, {} at time {}".format(
             packet.src, packet.flow, packet.id, self.res.env.now))
-        # Queue the new packet for transmission, and dequeue a packet
-        packets = yield self.res.transport(direction, packet)
-        # Transmit the dequeued packets, if any
-        yield self.res.env.process(self.transmit(direction, packets))
-
-    def transmit(self, direction, packets):
-        """Transmit packets across the link in a given direction.
-
-        This generating function yields a transmission process for each
-        packet given
-
-        :param int direction: the direction to transport the packet
-        :param packet: a list of packets to transmit
-        :type packet: [:class:`resources.Packet`]
-        :return: None
-        """
-        # Transmit packet after waiting, as if sending the packet
-        # across a physical link
-        for p in packets:
-            # Update total bits transmitted by link
-            self._transmitted += p.size
-
-            logger.info("transmitting packet {}, {}, {} at time {}".format(
-                p.src, p.flow, p.id, self.res.env.now))
-            # Increment directional traffic
-            self.res.update_traffic(direction, p.size)
-            yield simpy.util.start_delayed(self.res.env,
-                self._endpoints[direction].receive(p), self._delay)
-            self.res.update_traffic(direction, -p.size)
+        # Enqueue the new packet, and check if the packet wasn't dropped
+        dropped = yield self.res.enqueue(direction, packet)
+        # If the packet wan't dropped, and the link has available capacity
+        if not dropped and self._available(direction) >= resources.Packet.size:
+            # Dequeue a packet
+            packet = self.res.dequeue(direction)
+            # Transmit the packet
+            yield self.res.env.process(self._transmit(direction, packet))
 
 
 class Router(object):
