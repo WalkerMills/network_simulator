@@ -9,9 +9,12 @@ import heapq
 import itertools
 import numpy as np
 import simpy
-import process
 
 from matplotlib import pyplot as plt
+
+import network
+import process
+
 
 @enum.unique
 class Case(enum.Enum):
@@ -193,7 +196,7 @@ class MonitoredEnvironment(simpy.Environment):
             # Raise the value if not.
             raise event._value
 
-def run(adjacenct, tcp, until):
+def run(adjacent, tcp="FAST", until=None):
     """Runs the simulation with the given parameters. And displays
     graphs for monitored variables
 
@@ -206,17 +209,17 @@ def run(adjacenct, tcp, until):
     """
     sorted_data = dict()
 
-    n = network.Network(adjacency, tcp)
+    n = network.Network(adjacent, tcp)
     data = n.simulate(until)
 
-    for key in data:
+    for key, value in data:
         separated = key.split(',')
         title = separated[0]
         # creates new dictionary of tuples which contain 
         # data points w/ unique host-flow identifier
-        sorted_data[title].append((', '.join(separated[1:]), data[key]))
+        sorted_data[title].append((', '.join(separated[1:]), value))
 
-    for key, value in data:
+    for key, value in sorted_data:
         if key == "flow_received":
             graph(value, key, "Mbps", True, 1000000)
 
@@ -258,6 +261,7 @@ def graph(data, title, y_label, rate_flag, scaling_factor):
 
         plt.plot(x,y, "label = flow{}".format(dataset[0]))
 
+    # may need to insert legend here
     plt.set_title(title)
     plt.xlabel("simulation time, ms")
     plt.ylabel(y_label)
