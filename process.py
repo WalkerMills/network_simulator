@@ -456,21 +456,21 @@ class Reno(object):
         if self._wait_proc is not None:
             self._wait_proc.interrupt()
 
-        def get_departure(self, pid):
-            """Returns the departure time of a packet with given pid.
+    def get_departure(self, pid):
+        """Returns the departure time of a packet with given pid.
 
-            If there is a match for the packet id, return its departure time,
-            otherwise, return None
+        If there is a match for the packet id, return its departure time,
+        otherwise, return None
 
-            :return: departure time
-            :rtype: int or None
-            """
-            try:
-                _, time = next(filter(lambda p: p[0].id == pid, 
-                                      self._unacknowledged.items()))
-            except StopIteration:
-                time = None
-            return time
+        :return: departure time
+        :rtype: int or None
+        """
+        try:
+            _, time = next(filter(lambda p: p[0].id == pid, 
+                                  self._unacknowledged.items()))
+        except StopIteration:
+            time = None
+        return time
 
     def send(self):
         """Send all data packets.
