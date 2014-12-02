@@ -15,9 +15,6 @@ import test
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# TODO: calculate alpha for FAST TCP based on bottlenecks detected in the
-#       input graph
-
 
 class Network(object):
     """This class encapsulates a network simulation.

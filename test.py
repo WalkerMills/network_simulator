@@ -42,35 +42,35 @@ class TestCase(object):
     """
 
     adjacencies = {
-        Case.zero: ([(('h0', 'h1'), (80000000, 512000, 10))], 
-                    [(('h0', 'h1'), (160000000, 1000))]),
-        Case.one: ([(('h0', 'r0'), (100000000, 512000, 10)),
-                    (('r0', 'r1'), (80000000, 512000, 10)),
-                    (('r0', 'r3'), (80000000, 512000, 10)),
-                    (('r1', 'r2'), (80000000, 512000, 10)),
-                    (('r3', 'r2'), (80000000, 512000, 10)),
-                    (('r2', 'h1'), (100000000, 512000, 10))],
-                   [(('h0', 'h1'), (160000000, 500))]),
-        Case.two: ([(('r0', 'r1'), (80000000, 1024000, 10)),
-                    (('r1', 'r2'), (80000000, 1024000, 10)),
-                    (('r2', 'r3'), (80000000, 1024000, 10)),
-                    (('h0', 'r0'), (100000000, 1024000, 10)),
-                    (('h1', 'r0'), (100000000, 1024000, 10)),
-                    (('h2', 'r2'), (100000000, 1024000, 10)),
-                    (('h3', 'r3'), (100000000, 1024000, 10)),
-                    (('h4', 'r1'), (100000000, 1024000, 10)),
-                    (('h5', 'r3'), (100000000, 1024000, 10))],
-                   [(('h0', 'h3'), (280000000, 500)),
-                    (('h1', 'h4'), (120000000, 10000)),
-                    (('h2', 'h5'), (240000000, 20000))])
+        Case.zero: ([(('h0', 'h1'), (80000000, 512000, 10000000))], 
+                    [(('h0', 'h1'), (160000000, 1000000000))]),
+        Case.one: ([(('h0', 'r0'), (100000000, 512000, 10000000)),
+                    (('r0', 'r1'), (80000000, 512000, 10000000)),
+                    (('r0', 'r3'), (80000000, 512000, 10000000)),
+                    (('r1', 'r2'), (80000000, 512000, 10000000)),
+                    (('r3', 'r2'), (80000000, 512000, 10000000)),
+                    (('r2', 'h1'), (100000000, 512000, 10000000))],
+                   [(('h0', 'h1'), (160000000, 500000000))]),
+        Case.two: ([(('r0', 'r1'), (80000000, 1024000, 10000000)),
+                    (('r1', 'r2'), (80000000, 1024000, 10000000)),
+                    (('r2', 'r3'), (80000000, 1024000, 10000000)),
+                    (('h0', 'r0'), (100000000, 1024000, 10000000)),
+                    (('h1', 'r0'), (100000000, 1024000, 10000000)),
+                    (('h2', 'r2'), (100000000, 1024000, 10000000)),
+                    (('h3', 'r3'), (100000000, 1024000, 10000000)),
+                    (('h4', 'r1'), (100000000, 1024000, 10000000)),
+                    (('h5', 'r3'), (100000000, 1024000, 10000000))],
+                   [(('h0', 'h3'), (280000000, 500000000)),
+                    (('h1', 'h4'), (120000000, 10000000000)),
+                    (('h2', 'h5'), (240000000, 20000000000))])
     }
     """Edge & flow adjacency lists for each test case."""
 
     tcp_parameters = {
-        Case.zero: {'FAST': [[1, 50, 384000]], 'Reno': [[1, 50]]}, 
-        Case.one: {'FAST': [[1, 120, 384000]], 'Reno': [[1, 120]]},
-        Case.two: {'FAST': itertools.repeat([1, 200, 768000], 3), 
-                   'Reno': itertools.repeat([1, 200], 3)}
+        Case.zero: {'FAST': [[1, 50000000, 384000]], 'Reno': [[1, 50000000]]}, 
+        Case.one: {'FAST': [[1, 120000000, 384000]], 'Reno': [[1, 120000000]]},
+        Case.two: {'FAST': itertools.repeat([1, 200000000, 768000], 3), 
+                   'Reno': itertools.repeat([1, 200000000], 3)}
     }
     """TCP parameters for each test case."""
 
@@ -130,34 +130,23 @@ def run(adjacent, tcp="FAST", until=None):
         # data points w/ unique host-flow identifier
         sorted_data[title].append((', '.join(separated[1:]), value))
 
+    graph_data(sorted_data)
+    return sorted_data
+
+def graph_data(sorted_data):
+    graph_args = {"Flow received": ["flow", "Mbps", True, 1000000],
+                  "Flow transmitted": ["flow", "Mbps", True, 1000000],
+                  "Round trip times": ["flow", "ms", False, 1000000],
+                  "Host transmitted": ["host", "Mbps", True, 1000000],
+                  "Host received": ["host", "Mbps", True, 1000000],
+                  "Link fill": ["link", "packets", False, 1],
+                  "Dropped packets": ["link", "packets", False, 1],
+                  "Link transmitted": ["link", "Mbps", True, 1000000]}
+
     for key, value in sorted_data.items():
-        if key == "Flow received":
-            graph(value, key, "Mbps", True, 1000000)
+        _graph(key, value, *graph_args[key])
 
-        elif title == "Flow transmitted":
-            graph(value, key, "Mbps", True, 1000000)
-
-        elif title == "Flow rtt":
-            graph(value, key, "ms")
-
-        elif title == "Host transmitted":
-            graph(value, key, "Mbps", True, 1000000)
-
-        elif title == "Host received":
-            graph(value, key, "ms", True, 1000000)
-
-        elif title == "Link fill":
-            graph(value, key, "packets")
-
-        elif title == "Link dropped":
-            graph(value, key, "packets")
-
-        elif title == "Link transmitted":
-            graph(value, key, "Mbps", True, 1000000)
-
-    return data
-
-def graph(data, title, y_label, derive=False, scaling=1):
+def _graph(title, data, legend, y_label, derive=False, scaling=1):
     """
     """
     
@@ -171,17 +160,21 @@ def graph(data, title, y_label, derive=False, scaling=1):
         x, y = np.transpose(arr)
         y = [float(value) / float(scaling) for value in y]
 
-        if derive:
-            d = np.empty(len(y))
-            # calculate derivative
-            for i in range(len(y) - 1):
-                d[i] = float(y[i+1] - y[i]) / float(x[i+1] - x[i])
-            y = d
+        # if derive:
+        #     d = np.empty(len(y))
+        #     # calculate derivative
+        #     for i in range(len(y) - 1):
+        #         d[i] = float(y[i+1] - y[i]) / float(x[i+1] - x[i])
+        #     y = d
 
-        plt.plot(x, y, label="flow{}".format(dataset[0]))
+        #     y = np.gradient(y)
+
+        plt.plot(x, y, label="{} {}".format(legend, dataset[0]))
 
     # may need to insert legend here
+    plt.legend()
     plt.show()
+    plt.close('all')
 
     
 

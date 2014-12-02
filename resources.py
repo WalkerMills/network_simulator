@@ -37,9 +37,6 @@ class MonitoredEnvironment(simpy.Environment):
 
     def __init__(self, initial_time=0):
         super(MonitoredEnvironment, self).__init__(initial_time)
-
-        # Dictionary mapping identifier -> getter
-        self._getters = dict()
         # Dictionary mapping identifier -> [(time, monitored value)]
         self._monitored = dict()
 
@@ -60,57 +57,16 @@ class MonitoredEnvironment(simpy.Environment):
         """
         return self._monitored[name]
 
-    def _update(self):
-        """Update all monitored values."""
-        # For each identifier
-        for name, getter in self._getters.items():
-            # Append a new timestamped value to the list 
-            self._monitored[name].append((self._now, getter()))
-
-    def register(self, name, getter):
-        """Register a new identifier.
-
-        Raise a KeyError if the given identifier already exists.
-
-        :param str name: the identifier
-        :param function getter: a function to update the monitored value with
-        :return: None
-        """
-        # Don't accept duplicate identifiers
-        if name in self._getters.keys():
-            raise KeyError("already monitoring {}".format(name))
-
-        # Add this identifier to the getter & values dictionaries
-        self._getters[name] = getter
-        self._monitored[name] = []
-
-    def step(self):
-        """Process the next event, and update the monitored values.
-
-        Raise an :exc:`simpy.core.EmptySchedule` if no further events
-        are available.
-
-        :return: None
-        """
+    def update(self, name, value):
         try:
-            self._now, _, _, event = heapq.heappop(self._queue)
-        except IndexError:
-            raise simpy.core.EmptySchedule()
-
-        # Process callbacks of the event.
-        for callback in event.callbacks:
-            callback(event)
-        event.callbacks = None
-
-        # If the next event is in the future, or nonexistent 
-        if self.peek() > self._now:
-            # Update the monitored values
-            self._update()
-
-        if not event.ok and not hasattr(event, "defused"):
-            # The event has failed, check if it is defused.
-            # Raise the value if not.
-            raise event._value
+            if self._monitored[name][-1][0] == self._now:
+                self._monitored[name][-1] = (self._now, 
+                                             max(value, 
+                                                 self._monitored[name][-1][1]))
+            else:
+                self._monitored[name].append((self._now, value))
+        except KeyError:
+            self._monitored[name] = [(self._now, value)]
 
 
 class Packet(object):
@@ -299,12 +255,15 @@ class LinkEnqueue(simpy.events.Event):
             # Set dropped flag to False
             dropped = False
         else:
-            logger.info("dropped packet {}, {}, {} at time {}".format(
-                packet.src, packet.flow, packet.id, buffer_.env.now))
+            logger.info("dropped packet {}, {}, {} at time {}\t{}".format(
+                packet.src, packet.flow, packet.id, buffer_.env.now,
+                len(buffer_._queues[direction])))
             # Update dropped count
             buffer_._dropped += 1
             # Set dropped flag to True
             dropped = True
+            buffer_.env.update("Dropped packets,{}".format(buffer_.addr), 
+                               buffer_.dropped)
         # Finish the event
         self.succeed(dropped)
 
@@ -338,14 +297,17 @@ class LinkBuffer(object):
 
     :param simpy.Environment env: the simulation environment
     :param int size: link buffer size, in bits
+    :param int addr: link id
     """
 
     # TODO: update docstring
 
-    def __init__(self, env, size):
+    def __init__(self, env, size, addr):
         self.env = env
         # Buffer size (bits)
         self._size = float(size)
+        # Link id
+        self._addr = addr
 
         # Buffers for each edge direction
         self._queues = (deque(), deque())
@@ -355,6 +317,7 @@ class LinkBuffer(object):
         self._dropped = 0
 
         self._fill_cnt = list()
+        self.last_size = [Packet.size, Packet.size]
 
         # Bind event constructors as methods
         simpy.core.BoundClass.bind_early(self)
@@ -363,8 +326,13 @@ class LinkBuffer(object):
     """Enqueue a packet in the specified direction."""
 
     @property
+    def addr(self):
+        """Link id."""
+        return self._addr
+
+    @property
     def buffered(self):
-        """Return number of packets in link buffers"""
+        """Total number of packets in link buffers."""
         return sum(len(q) for q in self._queues)
 
     @property
@@ -412,13 +380,8 @@ class LinkBuffer(object):
             raise ValueError("not enough data in buffer")
         # Update fill
         self._fill[direction] += delta
-        if not self._fill_cnt:
-            self._fill_cnt = [[self.env.now, self.buffered]]
-        elif self.env.now == self._fill_cnt[-1][0]:
-            self._fill_cnt[-1][1] = max(self.buffered, self._fill_cnt[-1][1])
-        else:
-            self._fill_cnt.append([self.env.now, self.buffered])
-
+        self.env.update("Link fill,{}".format(self.addr), 
+                        self.buffered)
 
     def dequeue(self, direction):
         """Dequeue a packet in from the specified buffer.
@@ -432,6 +395,8 @@ class LinkBuffer(object):
             packet = self._queues[direction].popleft()
             # Decrement buffer fill
             self._update_fill(direction, -packet.size)
+            # Update last packet size
+            self.last_size[direction] = packet.size
         except IndexError:
             # If there is no packet to dequeue, set packet to None
             packet = None
@@ -545,9 +510,6 @@ class HostResource(PacketQueue):
         event = self._packets.pop(0)
         # If a data packet has reached its destination
         if event.packet.dest == self.addr and event.packet.size == Packet.size:
-            logger.info("host {} triggering acknowledgement for packet {}, {}"
-                        " at time {}".format(self._addr, event.packet.flow,
-                                             event.packet.id, self.env.now))
             # Get the event's ID in the hash table
             flow = (event.packet.src, event.packet.flow)
             # If the flow doesn't have an entry
