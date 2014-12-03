@@ -139,7 +139,7 @@ class Packet(object):
         :param function value: new value of the ID
         :return: None
         """
-        logger.info("setter called")
+        #logger.info("setter called")
         self._id = value
 
     @property
@@ -255,9 +255,9 @@ class LinkEnqueue(simpy.events.Event):
             # Set dropped flag to False
             dropped = False
         else:
-            logger.info("dropped packet {}, {}, {} at time {}\t{}".format(
-                packet.src, packet.flow, packet.id, buffer_.env.now,
-                len(buffer_._queues[direction])))
+            #logger.info("dropped packet {}, {}, {} at time {}\t{}".format(
+            #    packet.src, packet.flow, packet.id, buffer_.env.now,
+            #    len(buffer_._queues[direction])))
             # Update dropped count
             buffer_._dropped += 1
             # Set dropped flag to True
@@ -319,6 +319,11 @@ class LinkBuffer(object):
         self._fill_cnt = list()
         self.last_size = [Packet.size, Packet.size]
 
+        # running total for buffer occupancy
+        self._occupancy = 0
+        self._avg_fill = 0
+        self._last_update = 0
+
         # Bind event constructors as methods
         simpy.core.BoundClass.bind_early(self)
 
@@ -329,11 +334,6 @@ class LinkBuffer(object):
     def addr(self):
         """Link id."""
         return self._addr
-
-    @property
-    def buffered(self):
-        """Total number of packets in link buffers."""
-        return sum(len(q) for q in self._queues)
 
     @property
     def dropped(self):
@@ -381,7 +381,21 @@ class LinkBuffer(object):
         # Update fill
         self._fill[direction] += delta
         self.env.update("Link fill,{}".format(self.addr), 
-                        self.buffered)
+                        self.buffered(UP) + self.buffered(DOWN))
+
+    def update_buffered(self, direction, time):
+        diff = self._last_update - time
+        if diff >= 500000000:
+            self._avg_fill = self._occupancy / diff
+        else:
+            self._occupancy += len(self._queues[direction])
+        #logger.info("*****occupancy: {}, fill: {}".format(
+        #            self._occupancy, self._avg_fill))
+
+
+    def buffered(self, direction):
+        """Total number of packets in link buffers."""
+        return self._occupancy
 
     def dequeue(self, direction):
         """Dequeue a packet in from the specified buffer.
