@@ -16,8 +16,8 @@ from queue import Queue, Empty
 
 import resources
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.WARNING)
 
 
 class FAST(object):
@@ -132,7 +132,6 @@ class FAST(object):
             (self._window * self._min_trip / self._mean_trip + self._alpha)
         # Update window size by at most doubling it
         self._window = min(2 * self._window, window)
-        print("\n{}\n".format(self._window))
 
     def _window_control(self):
         """Periodically update the window size."""
@@ -883,8 +882,6 @@ class Link(object):
         self._up = Transport(self, resources.UP)
         # "Download" handler
         self._down = Transport(self, resources.DOWN)
-        # Link traffic (bps)
-        self._traffic = [0, 0]
         # Total number of bits transmitted by link
         self._transmitted = 0
         # Buffer flushing processes
@@ -906,23 +903,13 @@ class Link(object):
         """A list of connected endpoints (up to 1 per direction)"""
         return self._endpoints
 
-    def _available(self, direction):
-        """The available link capacity in the given direction.
-
-        :param int direction: link direction
-        :return: directional traffic (bps)
-        :rtype: int
-        """
-        return self._capacity - self._traffic[direction]
-
     def _flush(self, direction):
         while True:
             yield self.res.env.timeout(
                 self.res.last_size[direction] * 1e9 / self._capacity)
-            if resources.Packet.size <= self._available(direction):
-                packet = self.res.dequeue(direction)
-                if packet is not None:
-                    self.res.env.process(self._transmit(direction, packet))
+            packet = self.res.dequeue(direction)
+            if packet is not None:
+                self.res.env.process(self._transmit(direction, packet))
 
     def _transmit(self, direction, packet):
         """Transmit a packet across the link in a given direction.
@@ -942,29 +929,10 @@ class Link(object):
         # create getter for transmitted data
         self.res.env.update("Link transmitted,{}".format(self.res.addr),
                             self._transmitted)
-        # Increment link traffic
-        self._update_traffic(direction, packet.size)
         # Transmit packet after waiting, as if sending the packet
         # across a physical link
         yield simpy.util.start_delayed(self.res.env,
             self._endpoints[direction].receive(packet), self._delay)
-        # Decrement directional traffic
-        self._update_traffic(direction, -packet.size)
-
-    def _update_traffic(self, direction, delta):
-        """Update the link traffic in a given direction.
-
-        Negative delta is equivalent to decreasing traffic.
-
-        :param int direction: link direction
-        :param int delta: change in directional traffic (bps)
-        :return: None
-        """
-        # Check for valid value
-        if delta < 0 and self._traffic[direction] < abs(delta):
-            raise ValueError("not enough traffic")
-        # Update traffic
-        self._traffic[direction] += delta
 
     def connect(self, A, B):
         """Connect two network components via this link.
@@ -993,12 +961,12 @@ class Link(object):
 
         """
         try:
-            return self._delay * resources.Packet.size * \
-                (1 + self.res.fill(direction)) / \
-                math.log(self._available(direction))
+            cost = self._delay * resources.Packet.size * \
+                (1 + self.res.queued(direction)) / math.log(self.capacity)
         except ValueError:
             # Available capacity was 0, so return infinite cost
-            return float("inf")
+            cost = float("inf")
+        return cost
 
     def disconnect(self):
         """Disconnect a link from its two endpoints.
@@ -1023,8 +991,9 @@ class Link(object):
         :type packet: :class:`resources.Packet`
         :return: None
         """
-        logger.info("link{} received packet {}, {}, {} at time {}".format(
-            self._addr, packet.src, packet.flow, packet.id, self.res.env.now))
+        logger.info("link {} received packet {}, {}, {} at time {}".format(
+            self.res.addr, packet.src, packet.flow, packet.id, 
+            self.res.env.now))
         # Enqueue the new packet, and check if the packet wasn't dropped
         dropped = yield self.res.enqueue(direction, packet)
 
@@ -1062,7 +1031,7 @@ class Router(object):
         # timeout duration used to set routing table to recent update
         self._timeout = 50000000 #every 0.1s
         # timeout duration used to set frequency of routing table updates
-        self._bf_period = 5000000000 #every 5s
+        self._bf_period = 2000000000 #every 2s
 
     @property
     def addr(self):
@@ -1085,14 +1054,15 @@ class Router(object):
                 transport == rec_port:
                 continue
 
-            # update packet path and cost
-            new_path = path + [self._addr]
-            new_cost = cost + transport.cost
-            # create reference to outbound port for this router on the 
-            # router receiving the packet 
-            new_port = transport.reverse()
+            # # update packet path and cost
+            # new_path = path + [self._addr]
+            # new_cost = cost + transport.cost
+            # # create reference to outbound port for this router on the 
+            # # router receiving the packet 
+            # new_port = transport.reverse()
             # create new packet
-            new_pkt = resources.Routing((host, new_cost, new_path, new_port))
+            new_pkt = resources.Routing((host, cost + transport.cost, 
+                                        path + [self.addr], transport.reverse()))
             # send the newly created packet
             yield self.res.env.process(self.transmit(new_pkt, transport))
 
@@ -1116,16 +1086,23 @@ class Router(object):
                 return     
 
             # update new routing table if host isn't in table
-            if not (host in self._update_table.keys()):
+            if host not in self._update_table.keys():
                 self._update_table[host] = (port, cost)
                 yield self.res.env.process(
                     self._broadcast_packet(host, cost, path, port))
 
             # update new routing table if there's a more efficient path
             if self._update_table[host][1] > cost:
+                logger.warning("\nrouter {} updating path for host {}\n"
+                               "old: {}\nnew: {}, {}".format(
+                    self.addr, host, self._update_table, path, cost))
                 self._update_table[host] = (port, cost)
                 yield self.res.env.process(
                     self._broadcast_packet(host, cost, path, port))
+            else:
+                logger.warning("\nrouter {} not updating path for host {}\n"
+                               "old: {}\nnew: {}, {}".format(
+                    self.addr, host, self._update_table, path, cost))
                
             # after receiving a routing packet, begin update timeout
             yield self.res.env.timeout(self._timeout)
@@ -1150,6 +1127,9 @@ class Router(object):
         if self._converged and all(self._finish_table.values()):
             # If there is an updated routing table
             if self._update_table:
+                logger.warning("router {} replacing routing table\nold: {}\n"
+                               "new: {}".format(
+                    self.addr, self._routing_table, self._update_table))
                 # Replace the old table
                 self._routing_table = self._update_table
             # and reset all variables used for tracking convergence
@@ -1190,10 +1170,8 @@ class Router(object):
                         for t in filter(
                             lambda t: Host not in map(type, t.link.endpoints), 
                             self._links):
-                            new_port = t.reverse()
-                            new_cost += t.cost
                             new_pkt = resources.Routing(
-                                (host_id, new_cost, new_path, new_port))
+                                (host_id, new_cost + t.cost, new_path, t.reverse()))
                             yield self.res.env.process(
                                 self.transmit(new_pkt, t))
                     # initialize finish_table for neighboring routers

@@ -10,10 +10,10 @@ import queue
 import simpy
 import simpy.util
 
-from collections import deque
+from collections import deque, OrderedDict
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.WARNING)
 
 DOWN = 0
 """Download direction."""
@@ -248,10 +248,12 @@ class LinkEnqueue(simpy.events.Event):
             # logger.info("enqueueing packet {}, {}, {} at time {}".format(
             #     self._packet.src, self._packet.flow, self._packet.id, 
             #     self._buffer.env.now))
-            # Enqueue packet
-            buffer_._queues[direction].append(packet)
             # Increment buffer fill
             buffer_._update_fill(direction, packet.size)
+            # Enqueue packet
+            buffer_._queues[direction].append(packet)
+            # Add this packet to the dict of recent packets
+            buffer_._add_recent(direction, packet)
             # Set dropped flag to False
             dropped = False
         else:
@@ -311,12 +313,15 @@ class LinkBuffer(object):
 
         # Buffers for each edge direction
         self._queues = (deque(), deque())
+        # Length of time for calculating average arrival rate & queueing delay
+        self._time = 500000000 # .5 sec
+        # Recently received packets
+        self._recent = (OrderedDict(), OrderedDict())
         # Buffer fill (bits)
         self._fill = [0.0, 0.0]
         # Number of dropped packets
         self._dropped = 0
-
-        self._fill_cnt = list()
+        # Size of the last packet transmitted in each direction
         self.last_size = [Packet.size, Packet.size]
 
         # Bind event constructors as methods
@@ -352,6 +357,28 @@ class LinkBuffer(object):
         :rtype: int
         """
         return self._size
+
+    def _add_recent(self, direction, packet):
+        """Add a packet to the dictionary of recent packets.
+
+        If a packet is received which invalidates earlier data, remove
+        that data.
+
+        :param int direction: link direction
+        :param packet: the packet to add
+        :type packet: :class:`Packet`
+        :return: None
+        """
+        if not isinstance(packet, Routing):
+            self._recent[direction][packet] = [self.env.now, None]
+        invalid = list()
+        for p, times in self._recent[direction].items():
+            if times[0] + self._time < self.env.now:
+                invalid.append(p)
+            else:
+                break
+        for p in invalid:
+            del self._recent[direction][p]
 
     def _available(self, direction):
         """The available buffer capacity in the given direction.
@@ -397,6 +424,9 @@ class LinkBuffer(object):
             self._update_fill(direction, -packet.size)
             # Update last packet size
             self.last_size[direction] = packet.size
+            if not isinstance(packet, Routing):
+                # Set buffer exit time
+                self._recent[direction][packet][1] = self.env.now
         except IndexError:
             # If there is no packet to dequeue, set packet to None
             packet = None
@@ -405,10 +435,35 @@ class LinkBuffer(object):
     def fill(self, direction):
         """Returns the proportion of the buffer which is filled.
 
+        :param int direction: link direction
         :return: buffer fill as a proportion of buffer size
         :rtype: float
         """
         return self._fill[direction] / self._size
+
+    def queued(self, direction):
+        """Estimated number of queued packets.
+
+        This value is calculated using Little's law, which tells us that
+        the expected number of queued packets is equal to the rate at
+        which packets arrive, and the average amount of time each packet
+        spends in the buffer.
+
+        :param int direction: link direction
+        :return: estimated number of queued packets
+        :rtype: int
+        """
+        times = list(sorted(filter(
+            lambda t: t[1], 
+            self._recent[direction].values())))
+        if len(times) == 1:
+            return 1
+        elif len(times) > 1:
+            rate = len(times) / (times[-1][0] - times[0][0])
+            delay = sum(t[1] - t[0] for t in times) / len(times)
+            return rate * delay
+        else:
+            return 0
 
 
 class ReceivePacket(simpy.events.Event):
