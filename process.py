@@ -1023,8 +1023,8 @@ class Link(object):
         :type packet: :class:`resources.Packet`
         :return: None
         """
-        logger.info("link received packet {}, {}, {} at time {}".format(
-            packet.src, packet.flow, packet.id, self.res.env.now))
+        logger.info("link{} received packet {}, {}, {} at time {}".format(
+            self._addr, packet.src, packet.flow, packet.id, self.res.env.now))
         # Enqueue the new packet, and check if the packet wasn't dropped
         dropped = yield self.res.enqueue(direction, packet)
 
@@ -1053,17 +1053,16 @@ class Router(object):
         self._routing_table = dict()
         # Dictionary used to build a new routing table during an update
         self._update_table = dict()
+        # Dictionary used to assess local convergence of routing tables
+        self._finish_table = dict()
         # Arrival time of most recently processed routing packet
         self._last_arrival = float('inf')
-        # Dictionary of links to other routers 
-        self._finish_table = dict()
         # Flag indicating if router has converged
         self._converged = False
         # timeout duration used to set routing table to recent update
         self._timeout = 50000000 #every 0.1s
         # timeout duration used to set frequency of routing table updates
         self._bf_period = 5000000000 #every 5s
-
 
     @property
     def addr(self):
@@ -1074,7 +1073,7 @@ class Router(object):
         """
         return self._addr
 
-    def _broadcast_packet(self, host, cost, path, port):
+    def _broadcast_packet(self, host, cost, path, rec_port):
         """Broadcast a routing packet."""
 
         # create a new routing packet for each outbound link that's
@@ -1083,7 +1082,7 @@ class Router(object):
             # don't send routing packets to hosts or to the router
             # that sent the recently received packet.
             if Host in map(type, transport.link.endpoints) or \
-                transport == port:
+                transport == rec_port:
                 continue
 
             # update packet path and cost
@@ -1156,7 +1155,7 @@ class Router(object):
             # and reset all variables used for tracking convergence
             self._last_arrvial = float('inf')
             self._converged = False
-            self._finish_table = {k: False for k in self._finish_table.keys()}
+            self._finish_table = dict()
             self._update_table = dict()
 
     def _route(self, address):
@@ -1197,6 +1196,9 @@ class Router(object):
                                 (host_id, new_cost, new_path, new_port))
                             yield self.res.env.process(
                                 self.transmit(new_pkt, t))
+                    # initialize finish_table for neighboring routers
+                    else:
+                        self._finish_table[transport] = False
                 yield self.res.env.timeout(self._bf_period)
         except simpy.events.Interrupt:
             pass
@@ -1252,7 +1254,7 @@ class Router(object):
             # tranmit packet
             yield self.res.env.process(self.transmit(packet, transport))
             # Wait before sending another packet
-            yield self.res.env.timeout(packet.size * 1e9 / transport.capacity)
+            #yield self.res.env.timeout(packet.size * 1e9 / transport.capacity)
 
     def transmit(self, packet, transport):
         """Transmit an outbound packet.        
