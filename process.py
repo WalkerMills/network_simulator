@@ -456,7 +456,7 @@ class Reno(object):
                 self._CA == True
 
         # if in congestion avoidance phase
-        elif self._congestion_avoid == True:
+        elif self._CA == True:
             # If we have 3 duplicate ACK's
             if self._next.count(self._next[0]) == self._next.maxlen:
                 # enter fast transmit mode
@@ -465,6 +465,7 @@ class Reno(object):
                 # set flag so flow is in fast recovery mode until all
                 # transmitted packets are acknowledged
                 self._fast_recovery = True
+                self._CA = False
                 dropped = next(filter(lambda p: p.id == expected,
                            self._unacknowledged.keys()))
                 # immediately retransmit the dropped packet
@@ -478,7 +479,7 @@ class Reno(object):
             # entire transmitted window is acknowledged
             if len(self._unacknowledged.items()) == 0:
                     self._fast_recovery = False
-                    self._slow_start = True
+                    self._CA = True
 
     def get_departure(self, pid):
         """Returns the departure time of a packet with given pid.
