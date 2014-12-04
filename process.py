@@ -380,17 +380,19 @@ class Reno(object):
         """
         return self._window
 
-    def _wait(self, packet):
+    def _wait(self):
         """Wait for acknowledgements; time out if none are recieved."""
         try:
             # Wait for acknowledgement(s)
             yield self._flow.env.timeout(self._timeout)
+            logger.warning("timeout occurred".format(self._window))
             # For each unacknowledged packet
-            for packet, (time, _) in list(self._unacknowledged.items())[:]:
+            for packet, time in list(self._unacknowledged.items())[:]:
                 # If it has timed out
                 if time <= self._flow.env.now - self._timeout:
                     # Immediately retransmit the packet
                     self.transmit(packet)
+
             # Set the slow start threshold to half the window size
             self._ssthrsh = self._window / 2
             if self._ssthrsh == 0:
@@ -398,15 +400,15 @@ class Reno(object):
             # Reset window size
             self._window = 1
             # Double timeout length
-            if self._timeout < self._max_time:
-                self._timeout *= 2
+            #if self._timeout < self._max_time:
+            #    self._timeout *= 2
             #revert to slow start on timeout
             self._slow_start = True
             self._fast_recovery = False
             self._CA = False
 
         except simpy.Interrupt:
-            pass
+            self._wait_proc = None
 
     def _window_size(self):
         """Calculate the transimssion window size.
@@ -431,6 +433,11 @@ class Reno(object):
         :type ack: :class:`resources.ACK`
         :return: None
         """
+        # Stop the waiting process, if any
+        if self._wait_proc is not None:
+            self._wait_proc.interrupt()
+            self._wait_proc = None
+
         # ID of the packet being acknowledged
         pid = ack.id
         # ID expected next by the destination host
@@ -442,21 +449,21 @@ class Reno(object):
         packet = next(filter(lambda p: p.id == pid,
                       self._unacknowledged.keys()))
         
-        # kill the timeout process for this packet
-        if self._unacknowledged[packet][1].is_alive:
-            self._unacknowledged[packet][1].interrupt()
         # mark the packet as acknowledged
         del self._unacknowledged[packet]
 
         #if in slow start phase
         if self._slow_start == True:
             self._window += 1
+            logger.warning("slow start {}, ssthrsh {}".format(self._window,
+                                                              self._ssthrsh))
             if self._window >= self._ssthrsh:
-                self._slow_start == False
-                self._CA == True
+                self._slow_start = False
+                self._CA = True
 
         # if in congestion avoidance phase
         elif self._CA == True:
+            logger.warning("congestion avoidance {}".format(self._window))
             # If we have 3 duplicate ACK's
             if self._next.count(self._next[0]) == self._next.maxlen:
                 # enter fast transmit mode
@@ -470,13 +477,19 @@ class Reno(object):
                            self._unacknowledged.keys()))
                 # immediately retransmit the dropped packet
                 yield self._flow.env.process(self.transmit(dropped))
+                # wait for timeout
+                self._wait_proc = self._flow.env.process(self._wait())
+                yield self._wait_proc 
             else:
                 #otherwise increment window size for successful ack
-                self.window += 1 / self._window
+                self._window += 1 / self._window
         # if in fast recovery phase
         elif self._fast_recovery == True:
+            logger.warning("fast recovery {}".format(self._window))
             # don't make any adjustments until there's a timeout, or
             # entire transmitted window is acknowledged
+            for k in self._unacknowledged.keys():
+                logger.warning("unacknowledged: {}".format(k.id))
             if len(self._unacknowledged.items()) == 0:
                     self._fast_recovery = False
                     self._CA = True
@@ -491,7 +504,7 @@ class Reno(object):
         :rtype: int or None
         """
         try:
-            _, (time, _) = next(filter(lambda p: p[0].id == pid, 
+            _, time = next(filter(lambda p: p[0].id == pid, 
                                   self._unacknowledged.items()))
         except StopIteration:
             time = None
@@ -511,13 +524,13 @@ class Reno(object):
                     # Transmit the data packet
                     yield self._flow.env.process(self.transmit(packet))
                 # Wait for acknowledgements, or timeout
-                yield self._flow.env.timeout(self._timeout)
-
+                self._wait_proc = self._flow.env.process(self._wait())
+                yield self._wait_proc
         except StopIteration:
-            # Wait for acknowledgement(s)
-            yield self._flow.env.timeout(self._timeout)
-
-            # If there remain unacknowledged packets, they're assumed dropped
+            # Wait for packets in the last window
+            self._wait_proc = self._flow.env.process(self._wait())
+            yield self._wait_proc
+            # If there remain unacknowledged packets
             if len(self._unacknowledged) > 0:
                 # Make a generator for the dropped packets
                 self._gen = (p for p in list(self._unacknowledged.keys())[:])
@@ -535,8 +548,7 @@ class Reno(object):
         :return: None
         """
         # Mark the packet as unacknowledged
-        self._unacknowledged[packet] = (
-            self._flow.env.now, self._flow.env.process(self._wait(packet)))
+        self._unacknowledged[packet] = self._flow.env.now
         # Transmit the packet
         yield self._flow.env.process(self._flow.transmit(packet))
 
@@ -1167,9 +1179,9 @@ class Router(object):
             # If there is an updated routing table
             logger.info("router {} fully converged".format(self._addr))
             if self._update_table:
-                logger.warning("router {} replacing routing table\nold: {}\n"
-                               "new: {}".format(
-                    self.addr, self._routing_table, self._update_table))
+                #logger.warning("router {} replacing routing table\nold: {}\n"
+                #               "new: {}".format(
+                #    self.addr, self._routing_table, self._update_table))
                 # Replace the old table
                 self._routing_table = self._update_table
             # and reset all variables used for tracking convergence
