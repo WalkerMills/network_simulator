@@ -9,13 +9,11 @@ import simpy
 
 import gui
 import process
+import resources
 import test
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# TODO: calculate alpha for FAST TCP based on bottlenecks detected in the
-#       input graph
+logger.setLevel(logging.INFO)
 
 
 class Network(object):
@@ -41,14 +39,13 @@ class Network(object):
 
     :param adjacent: adjacency lists of links & flows defining a network
     :type adjacent: ([((str, str), (int, int, int))], 
-                     [((str, str), ((int, int), (str, list)))]), or
-                    :class:`test.Case`
+        [((str, str), ((int, int), (str, list)))]), or :class:`test.Case`
     :param str tcp: TCP specifier. Used iff adjacent is a :class:`test.Case`
     """
 
     def __init__(self, adjacent=None, tcp='FAST'):
         # Simulation environment
-        self.env = test.MonitoredEnvironment()
+        self.env = resources.MonitoredEnvironment()
         # Table of hosts in this network
         self._hosts = dict()
         # Table of routers in this network
@@ -88,17 +85,19 @@ class Network(object):
 
         # For each host address
         for addr in hosts:
-            logger.info('creating host {}'.format(addr))
+            logger.debug('creating host {}'.format(addr))
             # Make a new host with the given address
             self._hosts[addr] = process.Host(self.env, addr)
         # For each router address
         for addr in routers:
-            logger.info('creating router {}'.format(addr))
+            logger.debug('creating router {}'.format(addr))
             # Make a new router with the given address
             self._routers[addr] = process.Router(self.env, addr)
 
         # For each entry in the adjacency list
         for tags, parameters in edges:
+            # Add link addr to parameters used to create a link
+            parameters = list(parameters) + [len(self._links)]
             # Make a new link
             link = process.Link(self.env, *parameters)
             # Initialize a list of endpoints
@@ -121,7 +120,7 @@ class Network(object):
                     log_args.append("router")
                 log_args.append(addr)
 
-            logger.info('connecting {} {} and {} {}'.format(*log_args))
+            logger.debug('connecting {} {} and {} {}'.format(*log_args))
             # Connect the new link to its two endpoints
             link.connect(*endpoints)
             # Persist the new link
@@ -133,7 +132,7 @@ class Network(object):
             src = self._hosts[int(src_tag[1])]
             # Get the destination address
             dest = int(dest_tag[1])
-            logger.info('creating flow between hosts {} and {}'.format(
+            logger.debug('creating flow between hosts {} and {}'.format(
                 src.addr, dest))
             # Create & persist the new flow
             self._flows.append(process.Flow(self.env, src, dest, data, delay,
@@ -142,7 +141,8 @@ class Network(object):
     def simulate(self, until_=None):
         """Run the initialized simulation.
 
-        :param int until_: time to run the simulation until
+        :param until_: time or event to run the simulation until
+        :type until_: int or ``simpy.events.Event``
         :return: all monitored values
         :rtype: dict
         """
@@ -158,9 +158,14 @@ class Network(object):
                                         [f.finished for f in self._flows])
         # Run the simulation
         self.env.run(until=until_)
+        # check link fill
+        # for l in self._links:
+        #     print(l.res._fill_cnt)
+        logger.info("all flows have terminated at time {}".format(
+            self.env.now))
         # Retrieve monitored values
         values = self.env.monitored()
         # Reset the environment
-        self.env = test.MonitoredEnvironment()
+        self.env = resources.MonitoredEnvironment()
         # Return the monitored values
         return values

@@ -10,16 +10,73 @@ import queue
 import simpy
 import simpy.util
 
-from collections import deque
+from collections import deque, OrderedDict
 
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 DOWN = 0
 """Download direction."""
 
 UP = 1
 """Upload diretion."""
+
+
+class MonitoredEnvironment(simpy.Environment):
+    """SimPy environment with monitoring.
+
+    Processes may register identifiers, along with a getter (function)
+    to be periodically called, and its return value recorded.  After the
+    last event at a given time are processed, all monitored values are
+    updated.  However, monitored values are only updated after an event
+    occurs, i.e., if no events occur at a given time, no update is
+    performed.
+
+    :param int initial_time: simulation time to start at
+    """
+
+    def __init__(self, initial_time=0):
+        super(MonitoredEnvironment, self).__init__(initial_time)
+        # Dictionary mapping identifier -> [(time, monitored value)]
+        self._monitored = dict()
+        self._getters = dict()
+        self._step = 100000000
+        self._update_proc = self.process(self._update_registered())
+
+    def _update_registered(self):
+        while True:
+            for name, (g, avg, nonzero) in self._getters.items():
+                value = g() / self._step**avg
+                if not nonzero or (nonzero and value != 0):
+                    self._monitored[name].append((self.now, value))
+            yield self.timeout(self._step)
+
+    def monitored(self):
+        """The timestamped values of all monitored attributes.
+
+        :return: monitored attribute dict
+        :rtype: {str: [(int, object)]}
+        """
+        return self._monitored
+
+    def values(self, name):
+        """The values for the given identifier.
+
+        :param str name: the identifier to retrieve values for
+        :return: timestamped values list
+        :rtype: [(int, object)]
+        """
+        return self._monitored[name]
+
+    def register(self, name, getter, avg=False, nonzero=False):
+        self._getters[name] = (getter, avg, nonzero)
+        self._monitored[name] = list()
+
+    def update(self, name, value):
+        try:
+            self._monitored[name].append((self.now, value))
+        except KeyError:
+            self._monitored[name] = [(self.now, value)]
 
 
 class Packet(object):
@@ -92,7 +149,7 @@ class Packet(object):
         :param function value: new value of the ID
         :return: None
         """
-        logger.info("setter called")
+        #logger.debug("setter called")
         self._id = value
 
     @property
@@ -168,49 +225,62 @@ class Routing(Packet):
 
 
 class Finish(Routing):
-    """This class represents a packet used to communicate the
-    	end conditions for dynamic routing
+    """This class represents a finish packet.
+
+    Finish packets are used to communicate the termination condition
+    for dynamic routing.
 
     :param object payload: packet payload
-    """    
+    """
 
 
-class LinkTransport(simpy.events.Event):
-    """SimPy event representing directional packet transmission.
+class LinkEnqueue(simpy.events.Event):
+    """SimPy event representing packet buffering.
 
-    This event represents the transmission of a packet arcoss a
-    full-duplex link in the given direction.  It uses a limited size,
-    drop-tail buffer to queue packets for transmission.
+    This event represents the enqueuing of a packet in one of a link's
+    two buffers, as specified by ``direction``
 
-    :param link: the link that this transport event binds to
-    :type link: :class:`LinkResource`
-    :param int direction: the direction of this transport event
-    :param packet: the packet to transport
+    :param buffer_: the buffer that this enqueuing event binds to
+    :type buffer_: :class:`LinkBuffer`
+    :param int direction: the direction of the buffer
+    :param packet: the packet to enqueue
     :type packet: :class:`Packet`
     """
 
-    def __init__(self, link, direction, packet):
+    def __init__(self, buffer_, direction, packet):
         # Initialize event
-        super(LinkTransport, self).__init__(link.env)
-        self._link = link
+        super(LinkEnqueue, self).__init__(buffer_.env)
+        # Set queuing direction
         self._direction = direction
-        self._packet = packet
 
         # Enqueue the packet for transmission, if the buffer isn't full
-        if self._link._fill[direction] + self._packet.size <= self._link.size:
-            # logger.info("enqueueing packet {}, {}, {} at time {}".format(
+        if packet.size <= buffer_._available(direction):
+            # logger.debug("enqueuing packet {}, {}, {} at time {}".format(
             #     self._packet.src, self._packet.flow, self._packet.id, 
-            #     self._link.env.now))
+            #     self._buffer.env.now))
             # Increment buffer fill
-            self._link._fill[direction] += self._packet.size
-            # Enqueue self._packet
-            self._link._queues[direction].append(self)
+            buffer_._update_fill(direction, packet.size)
+            # Enqueue packet
+            buffer_._queues[direction].append(packet)
+            # Add this packet to the dict of recent packets
+            buffer_._add_recent(direction, packet)
+            # Set dropped flag to False
+            dropped = False
+            buffer_.env.update("Link fill,{}".format(buffer_.id), 
+                               sum(len(q) for q in buffer_._queues))
         else:
-            logger.info("dropped packet {}, {}, {} at time {}".format(
-                self._packet.src, self._packet.flow, self._packet.id, 
-                self._link.env.now))
-        # Flush as much of the buffer as possible through the self._link
-        self._link.flush(direction)
+            logger.info(
+                "link {} dropped packet {}, {}, {} at time {}\t{}".format(
+                    buffer_.id, packet.src, packet.flow, packet.id, 
+                    buffer_.env.now, len(buffer_._queues[direction])))
+            # Update dropped count
+            buffer_._dropped += 1
+            # Set dropped flag to True
+            dropped = True
+            buffer_.env.update("Dropped packets,{}".format(buffer_.id), 
+                               buffer_.dropped)
+        # Finish the event
+        self.succeed(dropped)
 
     def __enter__(self):
         return self
@@ -218,9 +288,7 @@ class LinkTransport(simpy.events.Event):
     def __exit__(self, exception, value, traceback):
         pass
 
-    def cancel(self, exception, value, traceback):
-        logger.info("{}\t{}".format(exception, value))
-        self.__exit__()
+    cancel = __exit__
 
     @property
     def direction(self):
@@ -231,18 +299,9 @@ class LinkTransport(simpy.events.Event):
         """
         return self._direction
 
-    @property
-    def packet(self):
-        """The packet to be transmitted.
 
-        :return: the packet in transit
-        :rtype: :class:`Packet`
-        """
-        return self._packet
-
-
-class LinkResource(object):
-    """SimPy resource representing a link.
+class LinkBuffer(object):
+    """SimPy resource representing a link's buffers.
 
     This class is a full-duplex link implemented as a resource.  Packet
     transmission is parametrized by direction, and each link has two
@@ -253,31 +312,55 @@ class LinkResource(object):
 
     :param simpy.Environment env: the simulation environment
     :param int size: link buffer size, in bits
+    :param int lid: link id
     """
 
-    def __init__(self, env, capacity, size):
+    # TODO: update docstring
+
+    def __init__(self, env, size, lid):
         self.env = env
-        # Link capacity (bps)
-        self._capacity = capacity
         # Buffer size (bits)
-        self._size = size
-        # Buffer fill (bits)
-        self._fill = [0, 0]
-        # Link traffic (bps)
-        self._traffic = [0, 0]
+        self._size = float(size)
+        # Link id
+        self._id = lid
 
         # Buffers for each edge direction
         self._queues = (deque(), deque())
-        # Bind any classes into methods now
+        # Length of time for calculating average arrival rate & queuing delay
+        self._time = 500000000 # .5 sec
+        # Recently received packets
+        self._recent = (OrderedDict(), OrderedDict())
+        # Buffer fill (bits)
+        self._fill = [0.0, 0.0]
+        # Number of dropped packets
+        self._dropped = 0
+        # Size of the last packet transmitted in each direction
+        self.last_size = [Packet.size, Packet.size]
+
+        # running total for buffer occupancy
+        self._occupancy = 0
+        self._avg_fill = 0
+        self._last_update = 0
+
+        # Bind event constructors as methods
         simpy.core.BoundClass.bind_early(self)
 
-    transport = simpy.core.BoundClass(LinkTransport)
-    """Transport packets across the link in a given direction."""
+    enqueue = simpy.core.BoundClass(LinkEnqueue)
+    """Enqueue a packet in the specified direction."""
 
     @property
-    def capacity(self):
-        """The maximum bitrate of the link in bps."""
-        return self._capacity
+    def id(self):
+        """Link id."""
+        return self._id
+
+    @property
+    def dropped(self):
+        """The number of dropped packets
+
+        :return: dropped packets
+        :rtype: int
+        """
+        return self._dropped
 
     @property
     def size(self):
@@ -288,64 +371,125 @@ class LinkResource(object):
         """
         return self._size
 
-    def available(self, direction):
-        """The available link capacity in the given direction.
+    def _add_recent(self, direction, packet):
+        """Add a packet to the dictionary of recent packets.
+
+        If a packet is received which invalidates earlier data, remove
+        that data.
 
         :param int direction: link direction
-        :return: directional traffic (bps)
+        :param packet: the packet to add
+        :type packet: :class:`Packet`
+        :return: None
+        """
+        if not isinstance(packet, Routing):
+            self._recent[direction][packet] = [self.env.now, None]
+        invalid = list()
+        for p, times in self._recent[direction].items():
+            if times[0] + self._time < self.env.now:
+                invalid.append(p)
+            else:
+                break
+        for p in invalid:
+            del self._recent[direction][p]
+
+    def _available(self, direction):
+        """The available buffer capacity in the given direction.
+
+        :param int direction: link direction
+        :return: free buffer space (bits)
         :rtype: int
         """
-        return self._capacity - self._traffic[direction]
+        return self._size - self._fill[direction]
 
-    def update_traffic(self, direction, delta):
-        """Update the link traffic in a given direction.
+    def _enqueue(self, event):
+        """Finish an equeuing."""
+        event.succeed()
 
-        Negative delta is equivalent to decreasing traffic.
+    def _update_fill(self, direction, delta):
+        """Update buffer fill for the given direction.
+
+        Negative delta is equivalent to decreasing buffer fill
 
         :param int direction: link direction
-        :param int delta: change in directional traffic (bps)
+        :param int delta: change in buffer fill (bits)
         :return: None
         """
         # Check for valid value
-        if delta < 0 and self._traffic[direction] < abs(delta):
-            raise ValueError("not enough traffic")
-        # Update traffic
-        self._traffic[direction] += delta
+        if delta < 0 and self._fill[direction] < abs(delta):
+            raise ValueError("not enough data in buffer")
+        # Update fill
+        self._fill[direction] += delta
+
+    def update_buffered(self, direction, time):
+        diff = self._last_update - time
+        if diff >= self._time:
+            self._avg_fill = self._occupancy / diff
+            self._occupancy = 0
+        else:
+            self._occupancy += len(self._queues[direction])
+        #logger.debug("*****occupancy: {}, fill: {}".format(
+        #            self._occupancy, self._avg_fill))
+
+
+    def buffered(self):
+        """Total number of packets in link buffers."""
+        return self._occupancy
+
+    def dequeue(self, direction):
+        """Dequeue a packet from the specified buffer.
+
+        :param int direction: link direction
+        :return: the dequeued packet
+        :rtype: :class:`Packet` or None
+        """
+        try:
+            # Get a packet from the queue
+            packet = self._queues[direction].popleft()
+            # Decrement buffer fill
+            self._update_fill(direction, -packet.size)
+            # Update last packet size
+            self.last_size[direction] = packet.size
+            if not isinstance(packet, Routing):
+                # Set buffer exit time
+                self._recent[direction][packet][1] = self.env.now
+        except IndexError:
+            # If there is no packet to dequeue, set packet to None
+            packet = None
+        return packet
 
     def fill(self, direction):
         """Returns the proportion of the buffer which is filled.
 
+        :param int direction: link direction
         :return: buffer fill as a proportion of buffer size
         :rtype: float
         """
         return self._fill[direction] / self._size
 
-    def flush(self, direction):
-        """Send as many packets as possible from the buffer.
+    def queued(self, direction):
+        """Estimated number of queued packets.
 
-        :param int direction: link direction to flush
-        :return: the packets popped from the buffer
-        :rtype: [:class:`Packet`]
+        This value is calculated using Little's law, which tells us that
+        the expected number of queued packets is equal to the rate at
+        which packets arrive, and the average amount of time each packet
+        spends in the buffer.
+
+        :param int direction: link direction
+        :return: estimated number of queued packets
+        :rtype: int
         """
-        # Initialize packet list
-        flushed = list()
-        event = None
-
-        while len(self._queues[direction]) > 0:
-            # Dequeue a packet
-            event = self._queues[direction].popleft()
-            # If the link isn't busy, flush another packet
-            if event.packet.size + self._traffic[direction] <= self._capacity:
-                flushed.append(event.packet)
-                # Update buffer fill
-                self._fill[direction] -= event.packet.size
-            else:
-                # Requeue the packet
-                self._queues[direction].appendleft(event)
-                break
-
-        if flushed:
-            event.succeed(flushed)
+        times = list(sorted(filter(
+            lambda t: t[1], 
+            self._recent[direction].values())))
+        if len(times) == 1:
+            return 1
+        elif len(times) > 1:
+            rate = len(times) / (times[-1][0] - times[0][0])
+            delay = sum(t[1] - t[0] for t in times) / len(times)
+            return rate * delay
+        else:
+            return 0
 
 
 class ReceivePacket(simpy.events.Event):
@@ -384,7 +528,7 @@ class ReceivePacket(simpy.events.Event):
 
 
 class PacketQueue(object):
-    """SimPy resource for queueing packets.
+    """SimPy resource for queuing packets.
 
     This class is a FIFO SimPy resource. It receives packets, but does not
     accept packet transmission requests.  Every packet arrival triggers
@@ -447,9 +591,6 @@ class HostResource(PacketQueue):
         event = self._packets.pop(0)
         # If a data packet has reached its destination
         if event.packet.dest == self.addr and event.packet.size == Packet.size:
-            logger.info("host {} triggering acknowledgement for packet {}, {}"
-                        " at time {}".format(self._addr, event.packet.flow,
-                                             event.packet.id, self.env.now))
             # Get the event's ID in the hash table
             flow = (event.packet.src, event.packet.flow)
             # If the flow doesn't have an entry

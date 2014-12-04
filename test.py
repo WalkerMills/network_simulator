@@ -6,10 +6,14 @@
 
 import enum
 import heapq
-import itertools
+import numpy as np
 import simpy
 
+from matplotlib import pyplot as plt
+
+import network
 import process
+
 
 @enum.unique
 class Case(enum.Enum):
@@ -37,35 +41,39 @@ class TestCase(object):
     """
 
     adjacencies = {
-        Case.zero: ([(('h0', 'h1'), (80000000, 512000, 10))], 
-                    [(('h0', 'h1'), (160000000, 1000))]),
-        Case.one: ([(('h0', 'r0'), (100000000, 512000, 10)),
-                    (('r0', 'r1'), (80000000, 512000, 10)),
-                    (('r0', 'r3'), (80000000, 512000, 10)),
-                    (('r1', 'r2'), (80000000, 512000, 10)),
-                    (('r3', 'r2'), (80000000, 512000, 10)),
-                    (('r2', 'h1'), (100000000, 512000, 10))],
-                   [(('h0', 'h1'), (160000000, 500))]),
-        Case.two: ([(('r0', 'r1'), (80000000, 1024000, 10)),
-                    (('r1', 'r2'), (80000000, 1024000, 10)),
-                    (('r2', 'r3'), (80000000, 1024000, 10)),
-                    (('h0', 'r0'), (100000000, 1024000, 10)),
-                    (('h1', 'r0'), (100000000, 1024000, 10)),
-                    (('h2', 'r2'), (100000000, 1024000, 10)),
-                    (('h3', 'r3'), (100000000, 1024000, 10)),
-                    (('h4', 'r1'), (100000000, 1024000, 10)),
-                    (('h5', 'r3'), (100000000, 1024000, 10))],
-                   [(('h0', 'h3'), (280000000, 500)),
-                    (('h1', 'h4'), (120000000, 10000)),
-                    (('h2', 'h5'), (240000000, 20000))])
+        Case.zero: ([(('h0', 'h1'), (10000000, 512000, 10000000))], 
+                    [(('h0', 'h1'), (160000000, 1000000000))]),
+        Case.one: ([(('h0', 'r0'), (12500000, 512000, 10000000)),
+                    (('r0', 'r1'), (10000000, 512000, 10000000)),
+                    (('r0', 'r3'), (10000000, 512000, 10000000)),
+                    (('r1', 'r2'), (10000000, 512000, 10000000)),
+                    (('r3', 'r2'), (10000000, 512000, 10000000)),
+                    (('r2', 'h1'), (12500000, 512000, 10000000))],
+                   [(('h0', 'h1'), (160000000, 500000000))]),
+        Case.two: ([(('r0', 'r1'), (10000000, 1024000, 10000000)),
+                    (('r1', 'r2'), (10000000, 1024000, 10000000)),
+                    (('r2', 'r3'), (10000000, 1024000, 10000000)),
+                    (('h0', 'r0'), (12500000, 1024000, 10000000)),
+                    (('h1', 'r0'), (12500000, 1024000, 10000000)),
+                    (('h2', 'r2'), (12500000, 1024000, 10000000)),
+                    (('h3', 'r3'), (12500000, 1024000, 10000000)),
+                    (('h4', 'r1'), (12500000, 1024000, 10000000)),
+                    (('h5', 'r3'), (12500000, 1024000, 10000000))],
+                   [(('h0', 'h3'), (280000000, 500000000)),
+                    (('h1', 'h4'), (120000000, 10000000000)),
+                    (('h2', 'h5'), (240000000, 20000000000))])
     }
     """Edge & flow adjacency lists for each test case."""
 
     tcp_parameters = {
-        Case.zero: {'FAST': [[1, 50, 384000]], 'Reno': [[1, 50]]}, 
-        Case.one: {'FAST': [[1, 100, 384000]], 'Reno': [[1, 100]]},
-        Case.two: {'FAST': itertools.repeat([1, 200, 768000], 3), 
-                   'Reno': itertools.repeat([1, 200], 3)}
+        Case.zero: {'FAST': [[1, 50000000, 32]], 'Reno': [[1, 50000000]]}, 
+        Case.one: {'FAST': [[1, 120000000, 20]], 'Reno': [[1, 100000000]]},
+        Case.two: {'FAST': [[1, 150000000, 20], 
+                            [1, 80000000, 20],
+                            [1, 80000000, 20]],
+                   'Reno': [[1, 150000000], 
+                            [1, 80000000],
+                            [1, 80000000]]}
     }
     """TCP parameters for each test case."""
 
@@ -100,93 +108,74 @@ class TestCase(object):
         # Return adjacency lists of edges & initialized flows
         return cls.adjacencies[case][0], flows
 
+def run(adjacent, tcp="FAST", until=None, graph=True):
+    """Runs the simulation with the given parameters. And displays
+    graphs for monitored variables
 
-class MonitoredEnvironment(simpy.Environment):
-    """SimPy environment with monitoring.
-
-    Processes may register identifiers, along with a getter (function)
-    to be periodically called, and its return value recorded.  After the
-    last event at a given time are processed, all monitored values are
-    updated.  However, monitored values are only updated after an event
-    occurs, i.e., if no events occur at a given time, no update is
-    performed.
-
-    :param int initial_time: simulation time to start at
+    :param adjacent: adjacency lists of links & flows defining a network
+    :type adjacent: ([((str, str), (int, int, int))], 
+        [((str, str), ((int, int), (str, list)))]), or :class:`test.Case`
+    :param str tcp: TCP specifier. Used iff adjacent is a :class:`test.Case`
+    :param until_: time or event to run the simulation until
+    :type until_: int or ``simpy.events.Event``
+    :param bool graph: graphing flag; graphs output if True
     """
+    sorted_data = dict()
 
-    def __init__(self, initial_time=0):
-        super(MonitoredEnvironment, self).__init__(initial_time)
+    n = network.Network(adjacent, tcp)
+    data = n.simulate(until)
 
-        # Dictionary mapping identifier -> getter
-        self._getters = dict()
-        # Dictionary mapping identifier -> [(time, monitored value)]
-        self._monitored = dict()
+    for key, value in data.items():
+        separated = key.split(',')
+        title = separated[0]
+        if title not in sorted_data.keys():
+            sorted_data[title] = list()
+        # creates new dictionary of tuples which contain 
+        # data points w/ unique host-flow identifier
+        sorted_data[title].append((', '.join(separated[1:]), value))
 
-    def monitored(self):
-        """The timestamped values of all monitored attributes.
+    if graph:
+        graph_data(sorted_data)
+    return sorted_data
 
-        :return: monitored attribute dict
-        :rtype: {str: [(int, object)]}
-        """
-        return self._monitored
+def graph_data(sorted_data, save_=False):
+    graph_args = {"Flow received": ["flow", "Mbps", False, 1000],
+                  "Flow transmitted": ["flow", "Mbps", False, 1000],
+                  "Round trip times": ["flow", "ms"],
+                  "Host transmitted": ["host", "Mbps", False, 1000],
+                  "Host received": ["host", "Mbps", False, 1000],
+                  "Link fill": ["link", "packets"],
+                  "Dropped packets": ["link", "packets"],
+                  "Link transmitted": ["link", "Mbps", False, 1000],
+                  "Window size": ["flow", "packets"],
+                  "Queuing delay": ["flow", "ns"]}
 
-    def values(self, name):
-        """The values for the given identifier.
+    for key, value in sorted_data.items():
+        _graph(key, value, *graph_args[key], save=save_)
 
-        :param str name: the identifier to retrieve values for
-        :return: timestamped values list
-        :rtype: [(int, object)]
-        """
-        return self._monitored[name]
+def _graph(title, data, legend, y_label, derive=False, scale=1, save=False):
+    fig = plt.figure()
+    fig.suptitle(title)
+    plt.xlabel("simulation time (ns)")
+    plt.ylabel(y_label)
 
-    def _update(self):
-        """Update all monitored values."""
-        # For each identifier
-        for name, getter in self._getters.keys():
-            # Append a new timestamped value to the list 
-            self._monitored[name].append((self._now, getter()))
+    for dataset in data:
+        arr = np.asarray(dataset[1])
+        x, y = np.transpose(arr)
+        y = [value * scale for value in y]
 
-    def register(self, name, getter):
-        """Register a new identifier.
+        if derive:
+            y = np.gradient(y)
+        plt.plot(x, y, label="{} {}".format(legend, dataset[0]))
 
-        Raise a KeyError if the given identifier already exists.
+    # may need to insert legend here
+    plt.legend()
+    if save:
+        plt.savefig(title + ".png")
+    else:
+        plt.show()
+    plt.close('all')
 
-        :param str name: the identifier
-        :param function getter: a function to update the monitored value with
-        :return: None
-        """
-        # Don't accept duplicate identifiers
-        if name in self._getters.keys():
-            raise KeyError("already monitoring {}".format(name))
+    
 
-        # Add this identifier to the getter & values dictionaries
-        self._getters[name] = getter
-        self._monitored[name] = []
 
-    def step(self):
-        """Process the next event, and update the monitored values.
-
-        Raise an :exc:`simpy.core.EmptySchedule` if no further events
-        are available.
-
-        :return: None
-        """
-        try:
-            self._now, _, _, event = heapq.heappop(self._queue)
-        except IndexError:
-            raise simpy.core.EmptySchedule()
-
-        # Process callbacks of the event.
-        for callback in event.callbacks:
-            callback(event)
-        event.callbacks = None
-
-        # If the next event is in the future, or nonexistent 
-        if self.peek() > self._now:
-            # Update the monitored values
-            self._update()
-
-        if not event.ok and not hasattr(event, "defused"):
-            # The event has failed, check if it is defused.
-            # Raise the value if not.
-            raise event._value
