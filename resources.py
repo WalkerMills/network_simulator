@@ -13,7 +13,7 @@ import simpy.util
 from collections import deque, OrderedDict
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.WARNING)
+logger.setLevel(logging.INFO)
 
 DOWN = 0
 """Download direction."""
@@ -40,7 +40,7 @@ class MonitoredEnvironment(simpy.Environment):
         # Dictionary mapping identifier -> [(time, monitored value)]
         self._monitored = dict()
         self._getters = dict()
-        self._step = 1000000
+        self._step = 10000000
         self._update_proc = self.process(self._update_registered())
 
     def _update_registered(self):
@@ -149,7 +149,7 @@ class Packet(object):
         :param function value: new value of the ID
         :return: None
         """
-        #logger.info("setter called")
+        #logger.debug("setter called")
         self._id = value
 
     @property
@@ -255,7 +255,7 @@ class LinkEnqueue(simpy.events.Event):
 
         # Enqueue the packet for transmission, if the buffer isn't full
         if packet.size <= buffer_._available(direction):
-            # logger.info("enqueuing packet {}, {}, {} at time {}".format(
+            # logger.debug("enqueuing packet {}, {}, {} at time {}".format(
             #     self._packet.src, self._packet.flow, self._packet.id, 
             #     self._buffer.env.now))
             # Increment buffer fill
@@ -269,7 +269,7 @@ class LinkEnqueue(simpy.events.Event):
             buffer_.env.update("Link fill,{}".format(buffer_.id), 
                                sum(len(q) for q in buffer_._queues))
         else:
-            #logger.info("dropped packet {}, {}, {} at time {}\t{}".format(
+            #logger.debug("dropped packet {}, {}, {} at time {}\t{}".format(
             #    packet.src, packet.flow, packet.id, buffer_.env.now,
             #    len(buffer_._queues[direction])))
             # Update dropped count
@@ -427,7 +427,7 @@ class LinkBuffer(object):
             self._occupancy = 0
         else:
             self._occupancy += len(self._queues[direction])
-        #logger.info("*****occupancy: {}, fill: {}".format(
+        #logger.debug("*****occupancy: {}, fill: {}".format(
         #            self._occupancy, self._avg_fill))
 
 

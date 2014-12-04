@@ -13,7 +13,7 @@ import resources
 import test
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.WARNING)
+logger.setLevel(logging.INFO)
 
 
 class Network(object):
@@ -85,12 +85,12 @@ class Network(object):
 
         # For each host address
         for addr in hosts:
-            logger.info('creating host {}'.format(addr))
+            logger.debug('creating host {}'.format(addr))
             # Make a new host with the given address
             self._hosts[addr] = process.Host(self.env, addr)
         # For each router address
         for addr in routers:
-            logger.info('creating router {}'.format(addr))
+            logger.debug('creating router {}'.format(addr))
             # Make a new router with the given address
             self._routers[addr] = process.Router(self.env, addr)
 
@@ -120,7 +120,7 @@ class Network(object):
                     log_args.append("router")
                 log_args.append(addr)
 
-            logger.info('connecting {} {} and {} {}'.format(*log_args))
+            logger.debug('connecting {} {} and {} {}'.format(*log_args))
             # Connect the new link to its two endpoints
             link.connect(*endpoints)
             # Persist the new link
@@ -132,7 +132,7 @@ class Network(object):
             src = self._hosts[int(src_tag[1])]
             # Get the destination address
             dest = int(dest_tag[1])
-            logger.info('creating flow between hosts {} and {}'.format(
+            logger.debug('creating flow between hosts {} and {}'.format(
                 src.addr, dest))
             # Create & persist the new flow
             self._flows.append(process.Flow(self.env, src, dest, data, delay,
@@ -161,7 +161,7 @@ class Network(object):
         # check link fill
         # for l in self._links:
         #     print(l.res._fill_cnt)
-        logger.warning("all flows have terminated at time {}".format(
+        logger.info("all flows have terminated at time {}".format(
             self.env.now))
         # Retrieve monitored values
         values = self.env.monitored()
