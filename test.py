@@ -67,8 +67,8 @@ class TestCase(object):
     """Edge & flow adjacency lists for each test case."""
 
     tcp_parameters = {
-        Case.zero: {'FAST': [[1, 50000000, 30]], 'Reno': [[1, 50000000]]}, 
-        Case.one: {'FAST': [[1, 120000000, 20]], 'Reno': [[1, 120000000]]},
+        Case.zero: {'FAST': [[1, 50000000, 32]], 'Reno': [[1, 50000000]]}, 
+        Case.one: {'FAST': [[1, 120000000, 32]], 'Reno': [[1, 120000000]]},
         Case.two: {'FAST': itertools.repeat([1, 200000000, 768000], 3), 
                    'Reno': itertools.repeat([1, 200000000], 3)}
     }
@@ -139,11 +139,11 @@ def graph_data(sorted_data, save_=False):
     graph_args = {"Flow received": ["flow", "Mbps", False, 1000],
                   "Flow transmitted": ["flow", "Mbps", False, 1000],
                   "Round trip times": ["flow", "ms"],
-                  "Host transmitted": ["host", "Mbps", False, 100],
-                  "Host received": ["host", "Mbps", False, 100],
+                  "Host transmitted": ["host", "Mbps", False, 1000],
+                  "Host received": ["host", "Mbps", False, 1000],
                   "Link fill": ["link", "packets"],
                   "Dropped packets": ["link", "packets"],
-                  "Link transmitted": ["link", "Mbps", False, 100],
+                  "Link transmitted": ["link", "Mbps", False, 1000],
                   "Window size": ["flow", "packets"],
                   "Queuing delay": ["flow", "ns"]}
 
