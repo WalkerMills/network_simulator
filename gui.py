@@ -11,8 +11,6 @@ import tkinter
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# TODO: add TCP specification to FlowDialog
-
 
 class Dialog(tkinter.Toplevel):
     """Abstract base class for constructing dialog boxes.
@@ -73,7 +71,6 @@ class Dialog(tkinter.Toplevel):
 
         :param master: parent of this widget
         :type master: tkinter.Frame
-
         :return: the widget with initial focus
         :rtype: tkinter.Widget
         """
@@ -166,6 +163,7 @@ class InputDialog(Dialog):
 
     def body(self, master):
         """Create a labeled entry box for each label.
+
         :param master: parent of this widget
         :type master: tkinter.Frame
         :return: the entry field with initial focus, or None
@@ -185,6 +183,7 @@ class InputDialog(Dialog):
 
     def apply(self):
         """Store the values entered in the entry labels.
+
         :return: None
         """
         # Store the entered parameters in this dialog's result
@@ -196,10 +195,11 @@ class FlowDialog(InputDialog):
     """Dialog for specifying flow parameters.
 
     The last entry in this dialog box is the TCP specification.  Since
-    different TCP algorithms take different parameters, the last entry
-    field takes a comma-separated list of values.  The first value must
-    be a valid TCP algorithm specifier. See :class:`process.Flow`, and
-    :class:`process.FAST` for more details on the input values.
+    all TCP algorithms take a window size & timeout, they appear as
+    entries by default; any additional arguments should be specified in
+    the last entry box, as a comma-separated list of values following a
+    valid TCP specifier.  See :data:`process.Flow.allowed_tcp` for a
+    list of TCP specifiers, and the corresponding classes.
 
     :param parent: parent of this widget
     :type parent: tkinter.Widget
@@ -209,7 +209,7 @@ class FlowDialog(InputDialog):
     labels = ["Data", "Initial delay", "Window", "Timeout", "TCP"]
     """Flow positional parameters (label names)."""
 
-    types = [int, int, int, int, {"FAST": [int, float]}]
+    types = [int, int, int, int, {"FAST": [int, float], "Reno": []}]
     """Input types."""
 
     def validate(self):
@@ -295,6 +295,7 @@ class LinkDialog(InputDialog):
         """
         return all(map(lambda i: self._get_entry(i, self.types[i]) >= 0,
                        range(len(self.labels))))
+
 
 class NetworkInput(tkinter.Frame):
     """This class implements a GUI to draw a network configuration.
