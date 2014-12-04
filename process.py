@@ -172,6 +172,7 @@ class FAST(object):
         # Current window size = difference between the largest & smallest
         # ID's + 1
         return ids[-1] - ids[0] + 1
+        # return len(self._unacknowledged)
 
     def acknowledge(self, ack):
         """Process an acknowledgement packet.
@@ -270,8 +271,8 @@ class FAST(object):
     def get_departure(self, pid):
         """Returns the departure time of a packet with given pid
 
-        :return: None, if packet id doens't match
         :return: time, if packet id has a match
+        :rtype: int or None
         """
         try:
             _, time = next(filter(lambda p: p[0].id == pid, 
@@ -359,6 +360,9 @@ class Reno(object):
 
         This event is only successful once all data packets have been
         sent, and any dropped packets retransmitted successfully.
+
+        :return: finished event
+        :rtype: ``simpy.events.Event``
         """
         return self._finished
 
@@ -385,7 +389,7 @@ class Reno(object):
         try:
             # Wait for acknowledgement(s)
             yield self._flow.env.timeout(self._timeout)
-            logger.warning("timeout occurred".format(self._window))
+            logger.debug("timeout occurred".format(self._window))
             # For each unacknowledged packet
             for packet, time in list(self._unacknowledged.items())[:]:
                 # If it has timed out
@@ -399,6 +403,10 @@ class Reno(object):
                 self._ssthrsh = 1
             # Reset window size
             self._window = 1
+            self._flow.env.update(
+                "Window size,{},{}".format(self._flow.host.addr, 
+                                           self._flow.id),
+                self._window)
             # Double timeout length
             #if self._timeout < self._max_time:
             #    self._timeout *= 2
@@ -455,20 +463,28 @@ class Reno(object):
         #if in slow start phase
         if self._slow_start == True:
             self._window += 1
-            logger.warning("slow start {}, ssthrsh {}".format(self._window,
+            logger.debug("slow start {}, ssthrsh {}".format(self._window,
                                                               self._ssthrsh))
+            self._flow.env.update(
+                "Window size,{},{}".format(self._flow.host.addr, 
+                                           self._flow.id),
+                self._window)
             if self._window >= self._ssthrsh:
                 self._slow_start = False
                 self._CA = True
 
         # if in congestion avoidance phase
         elif self._CA == True:
-            logger.warning("congestion avoidance {}".format(self._window))
+            logger.debug("congestion avoidance {}".format(self._window))
             # If we have 3 duplicate ACK's
             if self._next.count(self._next[0]) == self._next.maxlen:
                 # enter fast transmit mode
                 self._ssthrsh = self._window / 2
                 self._window = self._ssthrsh + 3
+                self._flow.env.update(
+                    "Window size,{},{}".format(self._flow.host.addr, 
+                                               self._flow.id),
+                    self._window)
                 # set flag so flow is in fast recovery mode until all
                 # transmitted packets are acknowledged
                 self._fast_recovery = True
@@ -483,13 +499,17 @@ class Reno(object):
             else:
                 #otherwise increment window size for successful ack
                 self._window += 1 / self._window
+                self._flow.env.update(
+                    "Window size,{},{}".format(self._flow.host.addr, 
+                                               self._flow.id),
+                    self._window)
         # if in fast recovery phase
         elif self._fast_recovery == True:
-            logger.warning("fast recovery {}".format(self._window))
+            logger.debug("fast recovery {}".format(self._window))
             # don't make any adjustments until there's a timeout, or
             # entire transmitted window is acknowledged
             for k in self._unacknowledged.keys():
-                logger.warning("unacknowledged: {}".format(k.id))
+                logger.debug("unacknowledged: {}".format(k.id))
             if len(self._unacknowledged.items()) == 0:
                     self._fast_recovery = False
                     self._CA = True
@@ -664,6 +684,7 @@ class Flow(object):
         return self._id
 
     def _avg_rtt(self):
+        """Return averge round time trip."""
         try:
             avg = sum(self._times) / len(self._times)
             self._times = list()
@@ -673,6 +694,7 @@ class Flow(object):
         return avg
 
     def _reset(self, attr):
+        """Get the value of the specified attribute, and reset it to 0."""
         ret = getattr(self, attr)
         setattr(self, attr, 0)
         return ret
@@ -710,7 +732,10 @@ class Flow(object):
         yield self.env.process(self._tcp.acknowledge(ack))
 
     def generate(self):
-        """Generate packets from this flow."""
+        """Generate packets from this flow.
+
+        :return: None
+        """
         yield self.env.timeout(self._delay)
         yield self.env.process(self._tcp.send())
 
@@ -743,6 +768,7 @@ class Flow(object):
         
         :param packet: the data packet to send
         :type packet: :class:`resources.Packet`
+        :return: None
         """
         #update transmitted number of bits
         self._transmitted += packet.size
@@ -811,6 +837,7 @@ class Host(object):
         return self._transport
 
     def _reset(self, attr):
+        """Get the value of the specified attribute, and reset it to 0."""
         ret = getattr(self, attr)
         setattr(self, attr, 0)
         return ret
@@ -883,18 +910,18 @@ class Host(object):
         """
 
         if packet.dest != self._addr:
-            #logger.debug("host {} transmitting packet {}, {}, {} at time"
-            #            " {}".format(self.addr, packet.src, packet.flow, 
-            #                         packet.id, self.res.env.now))
+            logger.debug("host {} transmitting packet {}, {}, {} at time"
+                       " {}".format(self.addr, packet.src, packet.flow, 
+                                    packet.id, self.res.env.now))
             
             # update bits transmitted by host
             self._transmitted += packet.size
             # Transmit an outbound packet
             yield self.res.env.process(self._transport.send(packet))
         else:
-            #logger.debug("host {} processing ACK {}, {}, {} at time"
-            #            " {}".format(self.addr, packet.src, packet.flow,
-            #                         packet.id, self.res.env.now))
+            logger.debug("host {} processing ACK {}, {}, {} at time"
+                       " {}".format(self.addr, packet.src, packet.flow,
+                                    packet.id, self.res.env.now))
             # Send an inbound ACK to its destination flow
             yield self.res.env.process(
                 self._flows[packet.flow].acknowledge(packet))
@@ -939,25 +966,42 @@ class Link(object):
 
     @property
     def capacity(self):
-        """The maximum bitrate of the link in bps."""
+        """The maximum bitrate of the link in bps.
+
+        :return: link rate
+        :rtype: int
+        """
         return self._capacity
 
     @property
     def delay(self):
-        """The link delay in seconds."""
+        """The link delay in nanoseconds.
+
+        :return: link delay
+        :rtype: int
+        """
         return self._delay
 
     @property
     def endpoints(self):
-        """A list of connected endpoints (up to 1 per direction)"""
+        """A list of connected endpoints (up to 1 per direction)
+
+        :return: connected endpoints
+        :rtype: list
+        """
         return self._endpoints
 
     @property
     def id(self):
-        """Link id."""
+        """Link id.
+
+        :return: id
+        :rtype: int
+        """
         return self.res.id
 
     def _flush(self, direction):
+        """Flush packets from the buffer at the link rate."""
         while True:
             yield self.res.env.timeout(
                 self.res.last_size[direction] * 1e9 / self._capacity)
@@ -966,6 +1010,7 @@ class Link(object):
                 self.res.env.process(self._transmit(direction, packet))
 
     def _reset(self, attr):
+        """Get the value of the specified attribute, and reset it to 0."""
         ret = getattr(self, attr)
         setattr(self, attr, 0)
         return ret
@@ -1011,15 +1056,17 @@ class Link(object):
     def cost(self, direction):
         """Return the cost of a direction on this link.
 
-        Total cost is calculated as the product of propagation delay,
-        (data) packet size, and 1 + buffer fill proportion, divided by
-        the logarithm of available capacity.
+        Total cost is calculated as link delay divided by the logarithm
+        of link capacity divided by (data) packet size, plus the running
+        total of buffer occupancy.
 
-        :param int direction: link direction to compute cost for
+        :param int direction: link direction (to compute cost for)
+        :return: directional link cost
+        :rtype: float
 
         """
         return self._delay / math.log(self.capacity / resources.Packet.size) \
-            + self.res.buffered(direction)
+            + self.res.buffered()
 
     def disconnect(self):
         """Disconnect a link from its two endpoints.
@@ -1079,7 +1126,7 @@ class Router(object):
         # Flag indicating if router has converged
         self._converged = False
         # timeout duration used to set routing table to recent update
-        self._timeout = 50000000 #every 0.1s
+        self._timeout = 50000000 #every 0.5s
         # timeout duration used to set frequency of routing table updates
         self._bf_period = 5000000000 #every 5s
 
@@ -1178,24 +1225,20 @@ class Router(object):
         if self._converged and all(self._finish_table.values()):
             # If there is an updated routing table
             logger.debug("router {} fully converged".format(self._addr))
-            if self._update_table:
-                logger.debug("router {} replacing routing table\nold: {}\n"
-                             "new: {}".format(
-                    self.addr, self._routing_table, self._update_table))
-                # Replace the old table
-                self._routing_table = self._update_table
+            for key, value in self._update_table.items():
+                self._routing_table[key] = value
             # and reset all variables used for tracking convergence
             self._last_arrvial = float('inf')
             self._converged = False
             self._finish_table = dict()
             self._update_table = dict()
 
-    def _route(self, address):
+    def route(self, address):
         """Return the correct transport handler for the given address.
 
         :param int address: the destination address
         :return: the transport handler selected by the routing policy
-        :rtype: function
+        :rtype: :class:`Transport`
         """
         return self._routing_table[address][0]
 
@@ -1279,7 +1322,7 @@ class Router(object):
         # handle data packet
         else:
             # look up outbound link using the routing table
-            transport = self._route(packet.dest)
+            transport = self.route(packet.dest)
             # tranmit packet
             yield self.res.env.process(self.transmit(packet, transport))
             # Wait before sending another packet
@@ -1291,7 +1334,7 @@ class Router(object):
         :param packet: the outbound packet     
         :type packet: :class:`resources.Packet`  
         :param transport: the outbound transport handler
-        :type transport: :class:`resources.Transport`      
+        :type transport: :class:`Transport`      
         :return: None      
         """              
         #logger.debug("router {} transmitting packet {}, {}, {} at time "
@@ -1327,22 +1370,38 @@ class Transport(object):
 
     @property
     def capacity(self):
-        """Capacity of the underlying link."""
+        """Capacity of the underlying link in bps.
+
+        :return: link rate
+        :rtype: int
+        """
         return self._link.capacity
 
     @property
     def cost(self):
-        """Directional cost of the underlying link."""
+        """Directional cost of the underlying link.
+
+        :return: link cost
+        :rtype: float
+        """
         return self._link.cost(self._direction)
 
     @property
     def direction(self):
-        """The direction of this transport handler."""
+        """The direction of this transport handler.
+
+        :return: link direction
+        :rtype: int
+        """
         return self._direction
 
     @property
     def link(self):
-        """The link that owns this transport handler."""
+        """The link that owns this transport handler.
+
+        :return: underlying link
+        :rtype: :class:`Link`
+        """
         return self._link
 
     def reverse(self):
@@ -1358,7 +1417,7 @@ class Transport(object):
 
         :param packet: the packet to send
         :type packet: :class:`resources.Packet`
-        :return: :func:`Link.receive` generating method
+        :return: :func:`Link.receive` (generating method)
         :rtype: generator
         """
         return self._link.receive(self._direction, packet)

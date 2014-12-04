@@ -40,7 +40,7 @@ class MonitoredEnvironment(simpy.Environment):
         # Dictionary mapping identifier -> [(time, monitored value)]
         self._monitored = dict()
         self._getters = dict()
-        self._step = 10000000
+        self._step = 100000000
         self._update_proc = self.process(self._update_registered())
 
     def _update_registered(self):
@@ -269,9 +269,10 @@ class LinkEnqueue(simpy.events.Event):
             buffer_.env.update("Link fill,{}".format(buffer_.id), 
                                sum(len(q) for q in buffer_._queues))
         else:
-            #logger.debug("dropped packet {}, {}, {} at time {}\t{}".format(
-            #    packet.src, packet.flow, packet.id, buffer_.env.now,
-            #    len(buffer_._queues[direction])))
+            logger.info(
+                "link {} dropped packet {}, {}, {} at time {}\t{}".format(
+                    buffer_.id, packet.src, packet.flow, packet.id, 
+                    buffer_.env.now, len(buffer_._queues[direction])))
             # Update dropped count
             buffer_._dropped += 1
             # Set dropped flag to True
@@ -431,7 +432,7 @@ class LinkBuffer(object):
         #            self._occupancy, self._avg_fill))
 
 
-    def buffered(self, direction):
+    def buffered(self):
         """Total number of packets in link buffers."""
         return self._occupancy
 

@@ -6,7 +6,6 @@
 
 import enum
 import heapq
-import itertools
 import numpy as np
 import simpy
 
@@ -68,9 +67,13 @@ class TestCase(object):
 
     tcp_parameters = {
         Case.zero: {'FAST': [[1, 50000000, 32]], 'Reno': [[1, 50000000]]}, 
-        Case.one: {'FAST': [[1, 120000000, 32]], 'Reno': [[1, 120000000]]},
-        Case.two: {'FAST': itertools.repeat([1, 200000000, 768000], 3), 
-                   'Reno': itertools.repeat([1, 200000000], 3)}
+        Case.one: {'FAST': [[1, 120000000, 20]], 'Reno': [[1, 100000000]]},
+        Case.two: {'FAST': [[1, 150000000, 20], 
+                            [1, 80000000, 20],
+                            [1, 80000000, 20]],
+                   'Reno': [[1, 150000000], 
+                            [1, 80000000],
+                            [1, 80000000]]}
     }
     """TCP parameters for each test case."""
 
