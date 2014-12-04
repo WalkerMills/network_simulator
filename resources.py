@@ -6,7 +6,6 @@
 
 import heapq
 import logging
-import numpy as np
 import queue
 import simpy
 import simpy.util
@@ -40,6 +39,17 @@ class MonitoredEnvironment(simpy.Environment):
         super(MonitoredEnvironment, self).__init__(initial_time)
         # Dictionary mapping identifier -> [(time, monitored value)]
         self._monitored = dict()
+        self._getters = dict()
+        self._step = 1000000
+        self._update_proc = self.process(self._update_registered())
+
+    def _update_registered(self):
+        while True:
+            for name, (g, avg, nonzero) in self._getters.items():
+                value = g() / self._step**avg
+                if not nonzero or (nonzero and value != 0):
+                    self._monitored[name].append((self.now, value))
+            yield self.timeout(self._step)
 
     def monitored(self):
         """The timestamped values of all monitored attributes.
@@ -47,8 +57,6 @@ class MonitoredEnvironment(simpy.Environment):
         :return: monitored attribute dict
         :rtype: {str: [(int, object)]}
         """
-        for key, value in self._monitored.items()[:]:
-            self._monitored[key] = (value[0], np.average(value[1]))
         return self._monitored
 
     def values(self, name):
@@ -60,14 +68,15 @@ class MonitoredEnvironment(simpy.Environment):
         """
         return self._monitored[name]
 
+    def register(self, name, getter, avg=False, nonzero=False):
+        self._getters[name] = (getter, avg, nonzero)
+        self._monitored[name] = list()
+
     def update(self, name, value):
         try:
-            if self._monitored[name][-1][0] == self._now:
-                self._monitored[name][-1][1].append(value)
-            else:
-                self._monitored[name].append((self._now, [value]))
+            self._monitored[name].append((self.now, value))
         except KeyError:
-            self._monitored[name] = [(self._now, [value])]
+            self._monitored[name] = [(self.now, value)]
 
 
 class Packet(object):
@@ -228,10 +237,10 @@ class Finish(Routing):
 class LinkEnqueue(simpy.events.Event):
     """SimPy event representing packet buffering.
 
-    This event represents the enqueueing of a packet in one of a link's
+    This event represents the enqueuing of a packet in one of a link's
     two buffers, as specified by ``direction``
 
-    :param buffer_: the buffer that this enqueueing event binds to
+    :param buffer_: the buffer that this enqueuing event binds to
     :type buffer_: :class:`LinkBuffer`
     :param int direction: the direction of the buffer
     :param packet: the packet to enqueue
@@ -241,12 +250,12 @@ class LinkEnqueue(simpy.events.Event):
     def __init__(self, buffer_, direction, packet):
         # Initialize event
         super(LinkEnqueue, self).__init__(buffer_.env)
-        # Set queueing direction
+        # Set queuing direction
         self._direction = direction
 
         # Enqueue the packet for transmission, if the buffer isn't full
         if packet.size <= buffer_._available(direction):
-            # logger.info("enqueueing packet {}, {}, {} at time {}".format(
+            # logger.info("enqueuing packet {}, {}, {} at time {}".format(
             #     self._packet.src, self._packet.flow, self._packet.id, 
             #     self._buffer.env.now))
             # Increment buffer fill
@@ -257,6 +266,8 @@ class LinkEnqueue(simpy.events.Event):
             buffer_._add_recent(direction, packet)
             # Set dropped flag to False
             dropped = False
+            buffer_.env.update("Link fill,{}".format(buffer_.id), 
+                               sum(len(q) for q in buffer_._queues))
         else:
             #logger.info("dropped packet {}, {}, {} at time {}\t{}".format(
             #    packet.src, packet.flow, packet.id, buffer_.env.now,
@@ -265,7 +276,7 @@ class LinkEnqueue(simpy.events.Event):
             buffer_._dropped += 1
             # Set dropped flag to True
             dropped = True
-            buffer_.env.update("Dropped packets,{}".format(buffer_.addr), 
+            buffer_.env.update("Dropped packets,{}".format(buffer_.id), 
                                buffer_.dropped)
         # Finish the event
         self.succeed(dropped)
@@ -300,21 +311,21 @@ class LinkBuffer(object):
 
     :param simpy.Environment env: the simulation environment
     :param int size: link buffer size, in bits
-    :param int addr: link id
+    :param int lid: link id
     """
 
     # TODO: update docstring
 
-    def __init__(self, env, size, addr):
+    def __init__(self, env, size, lid):
         self.env = env
         # Buffer size (bits)
         self._size = float(size)
         # Link id
-        self._addr = addr
+        self._id = lid
 
         # Buffers for each edge direction
         self._queues = (deque(), deque())
-        # Length of time for calculating average arrival rate & queueing delay
+        # Length of time for calculating average arrival rate & queuing delay
         self._time = 500000000 # .5 sec
         # Recently received packets
         self._recent = (OrderedDict(), OrderedDict())
@@ -337,9 +348,9 @@ class LinkBuffer(object):
     """Enqueue a packet in the specified direction."""
 
     @property
-    def addr(self):
+    def id(self):
         """Link id."""
-        return self._addr
+        return self._id
 
     @property
     def dropped(self):
@@ -391,7 +402,7 @@ class LinkBuffer(object):
         return self._size - self._fill[direction]
 
     def _enqueue(self, event):
-        """Finish an equeueing."""
+        """Finish an equeuing."""
         event.succeed()
 
     def _update_fill(self, direction, delta):
@@ -408,8 +419,6 @@ class LinkBuffer(object):
             raise ValueError("not enough data in buffer")
         # Update fill
         self._fill[direction] += delta
-        self.env.update("Link fill,{}".format(self.addr), 
-                        self.queued(UP) + self.queued(DOWN))
 
     def update_buffered(self, direction, time):
         diff = self._last_update - time
@@ -427,7 +436,7 @@ class LinkBuffer(object):
         return self._occupancy
 
     def dequeue(self, direction):
-        """Dequeue a packet in from the specified buffer.
+        """Dequeue a packet from the specified buffer.
 
         :param int direction: link direction
         :return: the dequeued packet
@@ -518,7 +527,7 @@ class ReceivePacket(simpy.events.Event):
 
 
 class PacketQueue(object):
-    """SimPy resource for queueing packets.
+    """SimPy resource for queuing packets.
 
     This class is a FIFO SimPy resource. It receives packets, but does not
     accept packet transmission requests.  Every packet arrival triggers

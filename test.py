@@ -42,24 +42,24 @@ class TestCase(object):
     """
 
     adjacencies = {
-        Case.zero: ([(('h0', 'h1'), (80000000, 512000, 10000000))], 
+        Case.zero: ([(('h0', 'h1'), (10000000, 512000, 10000000))], 
                     [(('h0', 'h1'), (160000000, 1000000000))]),
-        Case.one: ([(('h0', 'r0'), (100000000, 512000, 10000000)),
-                    (('r0', 'r1'), (80000000, 512000, 10000000)),
-                    (('r0', 'r3'), (80000000, 512000, 10000000)),
-                    (('r1', 'r2'), (80000000, 512000, 10000000)),
-                    (('r3', 'r2'), (80000000, 512000, 10000000)),
-                    (('r2', 'h1'), (100000000, 512000, 10000000))],
+        Case.one: ([(('h0', 'r0'), (12500000, 512000, 10000000)),
+                    (('r0', 'r1'), (10000000, 512000, 10000000)),
+                    (('r0', 'r3'), (10000000, 512000, 10000000)),
+                    (('r1', 'r2'), (10000000, 512000, 10000000)),
+                    (('r3', 'r2'), (10000000, 512000, 10000000)),
+                    (('r2', 'h1'), (12500000, 512000, 10000000))],
                    [(('h0', 'h1'), (160000000, 500000000))]),
-        Case.two: ([(('r0', 'r1'), (80000000, 1024000, 10000000)),
-                    (('r1', 'r2'), (80000000, 1024000, 10000000)),
-                    (('r2', 'r3'), (80000000, 1024000, 10000000)),
-                    (('h0', 'r0'), (100000000, 1024000, 10000000)),
-                    (('h1', 'r0'), (100000000, 1024000, 10000000)),
-                    (('h2', 'r2'), (100000000, 1024000, 10000000)),
-                    (('h3', 'r3'), (100000000, 1024000, 10000000)),
-                    (('h4', 'r1'), (100000000, 1024000, 10000000)),
-                    (('h5', 'r3'), (100000000, 1024000, 10000000))],
+        Case.two: ([(('r0', 'r1'), (10000000, 1024000, 10000000)),
+                    (('r1', 'r2'), (10000000, 1024000, 10000000)),
+                    (('r2', 'r3'), (10000000, 1024000, 10000000)),
+                    (('h0', 'r0'), (12500000, 1024000, 10000000)),
+                    (('h1', 'r0'), (12500000, 1024000, 10000000)),
+                    (('h2', 'r2'), (12500000, 1024000, 10000000)),
+                    (('h3', 'r3'), (12500000, 1024000, 10000000)),
+                    (('h4', 'r1'), (12500000, 1024000, 10000000)),
+                    (('h5', 'r3'), (12500000, 1024000, 10000000))],
                    [(('h0', 'h3'), (280000000, 500000000)),
                     (('h1', 'h4'), (120000000, 10000000000)),
                     (('h2', 'h5'), (240000000, 20000000000))])
@@ -67,8 +67,8 @@ class TestCase(object):
     """Edge & flow adjacency lists for each test case."""
 
     tcp_parameters = {
-        Case.zero: {'FAST': [[1, 50000000, 384000]], 'Reno': [[1, 50000000]]}, 
-        Case.one: {'FAST': [[1, 120000000, 384000]], 'Reno': [[1, 120000000]]},
+        Case.zero: {'FAST': [[1, 50000000, 30]], 'Reno': [[1, 50000000]]}, 
+        Case.one: {'FAST': [[1, 120000000, 20]], 'Reno': [[1, 120000000]]},
         Case.two: {'FAST': itertools.repeat([1, 200000000, 768000], 3), 
                    'Reno': itertools.repeat([1, 200000000], 3)}
     }
@@ -105,7 +105,7 @@ class TestCase(object):
         # Return adjacency lists of edges & initialized flows
         return cls.adjacencies[case][0], flows
 
-def run(adjacent, tcp="FAST", until=None):
+def run(adjacent, tcp="FAST", until=None, graph=True):
     """Runs the simulation with the given parameters. And displays
     graphs for monitored variables
 
@@ -115,6 +115,7 @@ def run(adjacent, tcp="FAST", until=None):
     :param str tcp: TCP specifier. Used iff adjacent is a :class:`test.Case`
     :param until_: time or event to run the simulation until
     :type until_: int or ``simpy.events.Event``
+    :param bool graph: graphing flag; graphs output if True
     """
     sorted_data = dict()
 
@@ -130,37 +131,35 @@ def run(adjacent, tcp="FAST", until=None):
         # data points w/ unique host-flow identifier
         sorted_data[title].append((', '.join(separated[1:]), value))
 
-    graph_data(sorted_data)
+    if graph:
+        graph_data(sorted_data)
     return sorted_data
 
-def graph_data(sorted_data):
-    graph_args = {"Flow received": ["flow", "Mbps", True, 1000000],
-                  "Flow transmitted": ["flow", "Mbps", True, 1000000],
-                  "Round trip times": ["flow", "ms", False, 1000000],
-                  "Host transmitted": ["host", "Mbps", True, 1000000],
-                  "Host received": ["host", "Mbps", True, 1000000],
-                  "Link fill": ["link", "packets", False, 1],
-                  "Dropped packets": ["link", "packets", False, 1],
-                  "Link transmitted": ["link", "Mbps", True, 1000000],
-                  "Window size": ["flow", "packets", False, 1],
-                  "Queueing delay": ["flow", "ns", False, 1]}
+def graph_data(sorted_data, save_=False):
+    graph_args = {"Flow received": ["flow", "Mbps", False, 1000],
+                  "Flow transmitted": ["flow", "Mbps", False, 1000],
+                  "Round trip times": ["flow", "ms"],
+                  "Host transmitted": ["host", "Mbps", False, 100],
+                  "Host received": ["host", "Mbps", False, 100],
+                  "Link fill": ["link", "packets"],
+                  "Dropped packets": ["link", "packets"],
+                  "Link transmitted": ["link", "Mbps", False, 100],
+                  "Window size": ["flow", "packets"],
+                  "Queuing delay": ["flow", "ns"]}
 
     for key, value in sorted_data.items():
-        _graph(key, value, *graph_args[key])
+        _graph(key, value, *graph_args[key], save=save_)
 
-def _graph(title, data, legend, y_label, derive=False, scaling=1):
-    """
-    """
-    
+def _graph(title, data, legend, y_label, derive=False, scale=1, save=False):
     fig = plt.figure()
     fig.suptitle(title)
-    plt.xlabel("simulation time (ms)")
+    plt.xlabel("simulation time (ns)")
     plt.ylabel(y_label)
 
     for dataset in data:
         arr = np.asarray(dataset[1])
         x, y = np.transpose(arr)
-        y = [float(value) / float(scaling) for value in y]
+        y = [value * scale for value in y]
 
         if derive:
             y = np.gradient(y)
@@ -168,7 +167,10 @@ def _graph(title, data, legend, y_label, derive=False, scaling=1):
 
     # may need to insert legend here
     plt.legend()
-    plt.show()
+    if save:
+        plt.savefig(title + ".png")
+    else:
+        plt.show()
     plt.close('all')
 
     

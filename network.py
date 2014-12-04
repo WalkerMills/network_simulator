@@ -161,6 +161,8 @@ class Network(object):
         # check link fill
         # for l in self._links:
         #     print(l.res._fill_cnt)
+        logger.warning("all flows have terminated at time {}".format(
+            self.env.now))
         # Retrieve monitored values
         values = self.env.monitored()
         # Reset the environment
