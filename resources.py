@@ -26,11 +26,10 @@ class MonitoredEnvironment(simpy.Environment):
     """SimPy environment with monitoring.
 
     Processes may register identifiers, along with a getter (function)
-    to be periodically called, and its return value recorded.  After the
-    last event at a given time are processed, all monitored values are
-    updated.  However, monitored values are only updated after an event
-    occurs, i.e., if no events occur at a given time, no update is
-    performed.
+    to be periodically called, and its return value recorded.
+    Alternatively, processes may use the ``update`` method to add a value
+    for the given identifier.  Thus, the environment supports both periodic
+    and process-controlled monitoring.
 
     :param int initial_time: simulation time to start at
     """
@@ -44,6 +43,7 @@ class MonitoredEnvironment(simpy.Environment):
         self._update_proc = self.process(self._update_registered())
 
     def _update_registered(self):
+        """Update all registered getters."""
         while True:
             for name, (g, avg, nonzero) in self._getters.items():
                 value = g() / self._step**avg
@@ -69,10 +69,33 @@ class MonitoredEnvironment(simpy.Environment):
         return self._monitored[name]
 
     def register(self, name, getter, avg=False, nonzero=False):
+        """Register a new identifier.
+
+        If the avg flag is set, the return value of the getter is divided
+        by the time step over which the update is performed, in order to
+        yield an average.  If the nonzero flag is set, only nonzero values
+        are recorded.
+
+        :param str name: identifier
+        :param function getter: getter function
+        :param bool avg: flag indicating whether to average the getter value
+        :param bool nonzero: flag indicating whether data is nonzero
+        :return: None
+        """
+        if name in self._monitored.keys():
+            raise ValueError('duplicate identifier \'{}\''.format(name))
         self._getters[name] = (getter, avg, nonzero)
         self._monitored[name] = list()
 
     def update(self, name, value):
+        """Add a value for the specified identifier.
+
+        If the given identifier does not exist, an entry for it is created.
+
+        :param str name: identifier
+        :param object value: the value to add
+        :return: None
+        """
         try:
             self._monitored[name].append((self.now, value))
         except KeyError:
@@ -422,6 +445,12 @@ class LinkBuffer(object):
         self._fill[direction] += delta
 
     def update_buffered(self, direction, time):
+        """Update the total buffer occupancy.
+
+        :param int direction: link direction
+        :param int time: time of the update
+        :return: None
+        """
         diff = self._last_update - time
         if diff >= self._time:
             self._avg_fill = self._occupancy / diff
@@ -433,7 +462,11 @@ class LinkBuffer(object):
 
 
     def buffered(self):
-        """Total number of packets in link buffers."""
+        """Total number of packets in link buffers.
+
+        :return: total buffer occupancy
+        :rtype: int
+        """
         return self._occupancy
 
     def dequeue(self, direction):

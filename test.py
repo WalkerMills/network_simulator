@@ -109,8 +109,14 @@ class TestCase(object):
         return cls.adjacencies[case][0], flows
 
 def run(adjacent, tcp="FAST", until=None, graph=True):
-    """Runs the simulation with the given parameters. And displays
-    graphs for monitored variables
+    """Runs the simulation with the given parameters. 
+
+    If the graph parameter is True, this method also displays graphs for
+    the monitored value.  The return value of this function is a dictionary
+    mapping identifier groupings to sets of datasets.  For example, if there
+    are entries for \"Link fill,0\" & \"Link fill,1\", in the raw output
+    of monitored values, these would be one key in the output, \"Link
+    fill\", mapped to a list of two datasets.
 
     :param adjacent: adjacency lists of links & flows defining a network
     :type adjacent: ([((str, str), (int, int, int))], 
@@ -119,6 +125,8 @@ def run(adjacent, tcp="FAST", until=None, graph=True):
     :param until_: time or event to run the simulation until
     :type until_: int or ``simpy.events.Event``
     :param bool graph: graphing flag; graphs output if True
+    :return: dict mapping identifier group to set of datasets
+    :rtype: {str: [[(int, float)]]}
     """
     sorted_data = dict()
 
@@ -139,6 +147,12 @@ def run(adjacent, tcp="FAST", until=None, graph=True):
     return sorted_data
 
 def graph_data(sorted_data, save_=False):
+    """Graph the data outputted by :func:`run`.
+
+    :param dict sorted_data: data of the form outputted by :func:`run`
+    :param bool save_: flag indicating whether to save or display graphs
+    :return: None
+    """
     graph_args = {"Flow received": ["flow", "Mbps", False, 1000],
                   "Flow transmitted": ["flow", "Mbps", False, 1000],
                   "Round trip times": ["flow", "ms"],
@@ -154,6 +168,7 @@ def graph_data(sorted_data, save_=False):
         _graph(key, value, *graph_args[key], save=save_)
 
 def _graph(title, data, legend, y_label, derive=False, scale=1, save=False):
+    """Graph a set of datasets."""
     fig = plt.figure()
     fig.suptitle(title)
     plt.xlabel("simulation time (ns)")
