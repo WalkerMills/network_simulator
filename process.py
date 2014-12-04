@@ -332,10 +332,17 @@ class Reno(object):
         # Length of time we wait before packets are considered dropped
         self._timeout = timeout
 
+        # flag indicating slow start phase
+        self._slow_start = True
+        # flag indicating congestion avoidance phase
+        self._CA = False
+        # flag indicating fast recovery phase
+        self._fast_recovery = False
+        
         # Maximum timeout (64 sec)
         self._max_time = 64000000000
         # Slow start threshold
-        self._slow_start = 32
+        self._ssthrsh = 32
         # Packet generator
         self._gen = self._flow.generator()
         # Hash table mapping unacknowledged packet -> departure time
@@ -389,14 +396,19 @@ class Reno(object):
                     # Immediately retransmit the packet
                     self.transmit(packet)
             # Set the slow start threshold to half the window size
-            self._slow_start = self._window / 2
-            if self._slow_start == 0:
-                self._slow_start = 1
+            self._ssthrsh = self._window / 2
+            if self._ssthrsh == 0:
+                self._ssthrsh = 1
             # Reset window size
             self._window = 1
             # Double timeout length
             if self._timeout < self._max_time:
                 self._timeout *= 2
+            #revert to slow start on timeout
+            self._slow_start = True
+            self._fast_recovery = False
+            self._CA = False
+
         except simpy.Interrupt:
             self._wait_proc = None
 
@@ -433,39 +445,43 @@ class Reno(object):
         # Get the unacknowledged packet
         packet = next(filter(lambda p: p.id == pid,
                       self._unacknowledged.keys()))
-        # Mark the packet as acknowledged
+        
+        # kill the timeout process for this packet
+        self._unacknowledged[packet][1].interrupt()
+        # mark the packet as acknowledged
         del self._unacknowledged[packet]
-        # If we just finished fast recovery
-        if self._recovery:
-            # And we received another duplicate acknowledgement
-            if expected == self._next[-1]:
-                # Increase window size by one
-                self._window += 1
-            else:
-                # Set the window size to the slow start threshold
-                self._window = self._slow_start
-        # If we have 3 duplicate ACK's
-        if self._next.count(self._next[0]) == self._next.maxlen:
-            # Get the dropped packet
-            dropped = next(filter(lambda p: p.id == expected,
+
+        #if in slow start phase
+        if self._slow_start == True:
+            self._window += 1
+            if self._window >= self._ssthrsh:
+                self._slow_start == False
+                self._CA == True
+
+        # if in congestion avoidance phase
+        elif self._congestion_avoid == True:
+            # If we have 3 duplicate ACK's
+            if self._next.count(self._next[0]) == self._next.maxlen:
+                # enter fast transmit mode
+                self._ssthrsh = self._window / 2
+                self._window = self._ssthrsh + 3
+                # set flag so flow is in fast recovery mode until all
+                # transmitted packets are acknowledged
+                self._fast_recovery = True
+                dropped = next(filter(lambda p: p.id == expected,
                            self._unacknowledged.keys()))
-            # Immediately retransmit the dropped packet
-            yield self._flow.env.process(self.transmit(dropped))
-            # Enter fast recovery mode
-            self._slow_start = self._window / 2
-            self._window = self._slow_start + 3
-            self._recovery = True
-        else:
-            # If in slow start mode
-            if self._window_size() <= self._slow_start:
-                # Increase window size by one packet
-                self._window += 1
+                # immediately retransmit the dropped packet
+                yield self._flow.env.process(self.transmit(dropped))
             else:
-                # Otherwise, linearly increase the window size
-                self._window += resources.Packet.size / self._window
-        # Stop the waiting process, if any
-        if self._wait_proc is not None:
-            self._wait_proc.interrupt()
+                #otherwise increment window size for successful ack
+                self.window += 1 / self._window
+        # if in fast recovery phase
+        elif self._fast_recovery == True:
+            # don't make any adjustments until there's a timeout, or
+            # entire transmitted window is acknowledged
+            if len(self._unacknowledged.items()) == 0:
+                    self._fast_recovery = False
+                    self._slow_start = True
 
     def get_departure(self, pid):
         """Returns the departure time of a packet with given pid.
@@ -497,13 +513,13 @@ class Reno(object):
                     # Transmit the data packet
                     yield self._flow.env.process(self.transmit(packet))
                 # Wait for acknowledgements, or timeout
-                self._wait_proc = self._flow.env.process(self._wait())
-                yield self._wait_proc
+                yield self._flow.env.timeout(self._timeout)
+
         except StopIteration:
-            # Wait for packets in the last window
-            self._wait_proc = self._flow.env.process(self._wait())
-            yield self._wait_proc
-            # If there remain unacknowledged packets
+            # Wait for acknowledgement(s)
+            yield self._flow.env.timeout(self._timeout)
+
+            # If there remain unacknowledged packets, they're assumed dropped
             if len(self._unacknowledged) > 0:
                 # Make a generator for the dropped packets
                 self._gen = (p for p in list(self._unacknowledged.keys())[:])
@@ -521,7 +537,8 @@ class Reno(object):
         :return: None
         """
         # Mark the packet as unacknowledged
-        self._unacknowledged[packet] = self._flow.env.now
+        self._unacknowledged[packet] = (self._flow.env.now, 
+                                        self._flow.env.process(self._wait()))
         # Transmit the packet
         yield self._flow.env.process(self._flow.transmit(packet))
 
