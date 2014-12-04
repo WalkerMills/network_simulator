@@ -141,7 +141,9 @@ def graph_data(sorted_data):
                   "Host received": ["host", "Mbps", True, 1000000],
                   "Link fill": ["link", "packets", False, 1],
                   "Dropped packets": ["link", "packets", False, 1],
-                  "Link transmitted": ["link", "Mbps", True, 1000000]}
+                  "Link transmitted": ["link", "Mbps", True, 1000000],
+                  "Window size": ["flow", "packets", False, 1],
+                  "Queueing delay": ["flow", "ns", False, 1]}
 
     for key, value in sorted_data.items():
         _graph(key, value, *graph_args[key])
@@ -160,15 +162,8 @@ def _graph(title, data, legend, y_label, derive=False, scaling=1):
         x, y = np.transpose(arr)
         y = [float(value) / float(scaling) for value in y]
 
-        # if derive:
-        #     d = np.empty(len(y))
-        #     # calculate derivative
-        #     for i in range(len(y) - 1):
-        #         d[i] = float(y[i+1] - y[i]) / float(x[i+1] - x[i])
-        #     y = d
-
-        #     y = np.gradient(y)
-
+        if derive:
+            y = np.gradient(y)
         plt.plot(x, y, label="{} {}".format(legend, dataset[0]))
 
     # may need to insert legend here

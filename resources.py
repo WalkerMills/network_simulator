@@ -6,6 +6,7 @@
 
 import heapq
 import logging
+import numpy as np
 import queue
 import simpy
 import simpy.util
@@ -46,6 +47,8 @@ class MonitoredEnvironment(simpy.Environment):
         :return: monitored attribute dict
         :rtype: {str: [(int, object)]}
         """
+        for key, value in self._monitored.items()[:]:
+            self._monitored[key] = (value[0], np.average(value[1]))
         return self._monitored
 
     def values(self, name):
@@ -60,13 +63,11 @@ class MonitoredEnvironment(simpy.Environment):
     def update(self, name, value):
         try:
             if self._monitored[name][-1][0] == self._now:
-                self._monitored[name][-1] = (self._now, 
-                                             max(value, 
-                                                 self._monitored[name][-1][1]))
+                self._monitored[name][-1][1].append(value)
             else:
-                self._monitored[name].append((self._now, value))
+                self._monitored[name].append((self._now, [value]))
         except KeyError:
-            self._monitored[name] = [(self._now, value)]
+            self._monitored[name] = [(self._now, [value])]
 
 
 class Packet(object):
@@ -139,7 +140,7 @@ class Packet(object):
         :param function value: new value of the ID
         :return: None
         """
-        logger.info("setter called")
+        #logger.info("setter called")
         self._id = value
 
     @property
@@ -257,9 +258,9 @@ class LinkEnqueue(simpy.events.Event):
             # Set dropped flag to False
             dropped = False
         else:
-            logger.info("dropped packet {}, {}, {} at time {}\t{}".format(
-                packet.src, packet.flow, packet.id, buffer_.env.now,
-                len(buffer_._queues[direction])))
+            #logger.info("dropped packet {}, {}, {} at time {}\t{}".format(
+            #    packet.src, packet.flow, packet.id, buffer_.env.now,
+            #    len(buffer_._queues[direction])))
             # Update dropped count
             buffer_._dropped += 1
             # Set dropped flag to True
@@ -324,6 +325,11 @@ class LinkBuffer(object):
         # Size of the last packet transmitted in each direction
         self.last_size = [Packet.size, Packet.size]
 
+        # running total for buffer occupancy
+        self._occupancy = 0
+        self._avg_fill = 0
+        self._last_update = 0
+
         # Bind event constructors as methods
         simpy.core.BoundClass.bind_early(self)
 
@@ -334,11 +340,6 @@ class LinkBuffer(object):
     def addr(self):
         """Link id."""
         return self._addr
-
-    @property
-    def buffered(self):
-        """Total number of packets in link buffers."""
-        return sum(len(q) for q in self._queues)
 
     @property
     def dropped(self):
@@ -408,7 +409,22 @@ class LinkBuffer(object):
         # Update fill
         self._fill[direction] += delta
         self.env.update("Link fill,{}".format(self.addr), 
-                        self.buffered)
+                        self.queued(UP) + self.queued(DOWN))
+
+    def update_buffered(self, direction, time):
+        diff = self._last_update - time
+        if diff >= self._time:
+            self._avg_fill = self._occupancy / diff
+            self._occupancy = 0
+        else:
+            self._occupancy += len(self._queues[direction])
+        #logger.info("*****occupancy: {}, fill: {}".format(
+        #            self._occupancy, self._avg_fill))
+
+
+    def buffered(self, direction):
+        """Total number of packets in link buffers."""
+        return self._occupancy
 
     def dequeue(self, direction):
         """Dequeue a packet in from the specified buffer.
