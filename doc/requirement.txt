@@ -1,4 +1,5 @@
 simpy
 Pmw
 numpy
+freetype-py
 matplotlib
