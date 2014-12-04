@@ -350,10 +350,6 @@ class Reno(object):
         # Next ID's expected by the destination host.  Last 4 are cached to
         # check for packet dropping (3 duplicate ACK's)
         self._next = deque(maxlen=4)
-        # Wait for acknowledgement process
-        self._wait_proc = None
-        # Recovery mode flag
-        self._recovery = False
         # Finish event
         self._finished = simpy.events.Event(self._flow.env)
 
@@ -384,13 +380,13 @@ class Reno(object):
         """
         return self._window
 
-    def _wait(self):
+    def _wait(self, packet):
         """Wait for acknowledgements; time out if none are recieved."""
         try:
             # Wait for acknowledgement(s)
             yield self._flow.env.timeout(self._timeout)
             # For each unacknowledged packet
-            for packet, time in list(self._unacknowledged.items())[:]:
+            for packet, (time, _) in list(self._unacknowledged.items())[:]:
                 # If it has timed out
                 if time <= self._flow.env.now - self._timeout:
                     # Immediately retransmit the packet
@@ -410,7 +406,7 @@ class Reno(object):
             self._CA = False
 
         except simpy.Interrupt:
-            self._wait_proc = None
+            pass
 
     def _window_size(self):
         """Calculate the transimssion window size.
@@ -447,7 +443,8 @@ class Reno(object):
                       self._unacknowledged.keys()))
         
         # kill the timeout process for this packet
-        self._unacknowledged[packet][1].interrupt()
+        if self._unacknowledged[packet][1].is_alive:
+            self._unacknowledged[packet][1].interrupt()
         # mark the packet as acknowledged
         del self._unacknowledged[packet]
 
@@ -493,7 +490,7 @@ class Reno(object):
         :rtype: int or None
         """
         try:
-            _, time = next(filter(lambda p: p[0].id == pid, 
+            _, (time, _) = next(filter(lambda p: p[0].id == pid, 
                                   self._unacknowledged.items()))
         except StopIteration:
             time = None
@@ -537,8 +534,8 @@ class Reno(object):
         :return: None
         """
         # Mark the packet as unacknowledged
-        self._unacknowledged[packet] = (self._flow.env.now, 
-                                        self._flow.env.process(self._wait()))
+        self._unacknowledged[packet] = (
+            self._flow.env.now, self._flow.env.process(self._wait(packet)))
         # Transmit the packet
         yield self._flow.env.process(self._flow.transmit(packet))
 
