@@ -614,7 +614,7 @@ class Flow(object):
         # List of roundtrip times for packets in given timestep
         self._times = list()
         # Register this flow with its host, and get its ID
-        self._id = self.host.register(self)
+        self._id = self._host.register(self)
         # Check for a valid TCP specifier
         try:
             # Initialize TCP object
@@ -632,7 +632,7 @@ class Flow(object):
             "Flow received,{},{}".format(self._host.addr, self._id),
             lambda: self._reset("_received"), True, True)
         self.env.register(
-            "Flow transmitted,{},{}".format(self._host.addr, self.id),
+            "Flow transmitted,{},{}".format(self._host.addr, self._id),
             lambda: self._reset("_transmitted"), True, True)
 
     @property
@@ -720,8 +720,8 @@ class Flow(object):
         :type ack: :class:`resources.ACK`
         :return: None
         """
-        #logger.debug("flow {}, {} acknowledges packet {} at time {}".format(
-        #    self._id, self._host.addr, ack.id, self.env.now))
+        logger.debug("flow {}, {} acknowledges packet {} at time {}".format(
+           self._id, self._host.addr, ack.id, self.env.now))
 
         # Update round trip times
         self._update_rtt(ack.id)
@@ -758,7 +758,7 @@ class Flow(object):
             n = math.ceil(self._data / resources.Packet.size)
 
         # Create packet generator
-        g = (resources.Packet(self._host.addr, self.dest, self.id, i)
+        g = (resources.Packet(self._host.addr, self._dest, self._id, i)
              for i in range(n))
 
         return g
@@ -804,7 +804,7 @@ class Host(object):
         # Bits received by host
         self._received = 0
 
-        self.res.env.register("Host received,{}".format(self.addr),
+        self.res.env.register("Host received,{}".format(self._addr),
                               lambda: self._reset("_received"), True, True)
         self.res.env.register("Host transmitted,{}".format(self._addr),
                               lambda: self._reset("_transmitted"), True, True)
@@ -874,7 +874,7 @@ class Host(object):
         :param packet: the packet to process
         :type packet: :class:`resources.Packet`
         """
-        if packet.dest == self.addr:
+        if packet.dest == self._addr:
             # update bits received by host
             self._received += packet.size
 
@@ -911,7 +911,7 @@ class Host(object):
 
         if packet.dest != self._addr:
             logger.debug("host {} transmitting packet {}, {}, {} at time"
-                       " {}".format(self.addr, packet.src, packet.flow, 
+                       " {}".format(self._addr, packet.src, packet.flow, 
                                     packet.id, self.res.env.now))
             
             # update bits transmitted by host
@@ -920,7 +920,7 @@ class Host(object):
             yield self.res.env.process(self._transport.send(packet))
         else:
             logger.debug("host {} processing ACK {}, {}, {} at time"
-                       " {}".format(self.addr, packet.src, packet.flow,
+                       " {}".format(self._addr, packet.src, packet.flow,
                                     packet.id, self.res.env.now))
             # Send an inbound ACK to its destination flow
             yield self.res.env.process(
@@ -962,7 +962,7 @@ class Link(object):
                             self.res.env.process(self._flush(resources.DOWN)))
 
         self.res.env.register("Link transmitted,{}".format(self.res.id),
-                              lambda: self._reset("_transmitted"), True, True)
+                              lambda: self._reset("_transmitted"), True)
 
     @property
     def capacity(self):
@@ -1003,11 +1003,14 @@ class Link(object):
     def _flush(self, direction):
         """Flush packets from the buffer at the link rate."""
         while True:
-            yield self.res.env.timeout(
-                self.res.last_size[direction] * 1e9 / self._capacity)
             packet = self.res.dequeue(direction)
             if packet is not None:
+                yield self.res.env.timeout(
+                    packet.size * 1e9 / self._capacity)
                 self.res.env.process(self._transmit(direction, packet))
+            else:
+                yield self.res.env.timeout(
+                    resources.Packet.size * 1e9 / self._capacity)
 
     def _reset(self, attr):
         """Get the value of the specified attribute, and reset it to 0."""
@@ -1026,8 +1029,10 @@ class Link(object):
         :type packet: :class:`resources.Packet`
         :return: None
         """
-        logger.debug("link {} transmitting packet {}, {}, {} at time {}".format(
-           self.res.id, packet.src, packet.flow, packet.id, self.res.env.now))
+        logger.debug(
+            "link {} transmitting packet {}, {}, {} at time {}".format(
+                self.res.id, packet.src, packet.flow, packet.id, 
+                self.res.env.now))
         # Update total bits transmitted by link
         self._transmitted += packet.size
         # update average of buffer fill
@@ -1065,7 +1070,7 @@ class Link(object):
         :rtype: float
 
         """
-        return self._delay / math.log(self.capacity / resources.Packet.size) \
+        return self._delay / math.log(self._capacity / resources.Packet.size) \
             + self.res.buffered()
 
     def disconnect(self):
@@ -1091,7 +1096,7 @@ class Link(object):
         :type packet: :class:`resources.Packet`
         :return: None
         """
-        # Enqueue the new packet, and check if the packet wasn't dropped
+        # Enqueue the new packet, and get the dropped status
         dropped = yield self.res.enqueue(direction, packet)
 
 
@@ -1194,9 +1199,10 @@ class Router(object):
 
             # update new routing table if there's a more efficient path
             if self._update_table[host][1] > cost:
-                logger.debug("R{} replace H{}: L{}, cost {} to L{}, cost {}".format(
-                    self._addr, host, self._update_table[host][0].link.id, 
-                    self._update_table[host][1], rec_port.link.id, cost))
+                logger.debug(
+                    "R{} replace H{}: L{}, cost {} to L{}, cost {}".format(
+                        self._addr, host, self._update_table[host][0].link.id, 
+                        self._update_table[host][1], rec_port.link.id, cost))
                 self._update_table[host] = (rec_port, cost)
                 yield self.res.env.process(
                     self._broadcast_packet(host, cost, path, rec_port))
@@ -1265,7 +1271,7 @@ class Router(object):
                             self._links):
                             packet = resources.Routing(
                                 (new_host.addr, transport.cost + t.cost, 
-                                 [self.addr], t.reverse()))
+                                 [self._addr], t.reverse()))
                             yield self.res.env.process(
                                 self.transmit(packet, t))
                     else:
@@ -1311,8 +1317,8 @@ class Router(object):
         :type packet: :class:`resources.Packet`
         :return: None
         """
-        #logger.debug("router {} received packet {}, {}, {} at time {}".format(
-        #    self.addr, packet.src, packet.flow, packet.id, self.res.env.now))
+        logger.debug("router {} received packet {}, {}, {} at time {}".format(
+           self._addr, packet.src, packet.flow, packet.id, self.res.env.now))
 
         # Push another packet through the queue
         packet = yield self.res.receive(packet)
@@ -1337,9 +1343,10 @@ class Router(object):
         :type transport: :class:`Transport`      
         :return: None      
         """              
-        #logger.debug("router {} transmitting packet {}, {}, {} at time "
-        #            "{}".format(self.addr, packet.src, packet.flow, packet.id,
-        #                        self.res.env.now))
+        logger.debug(
+            "router {} transmitting packet {}, {}, {} at time {}".format(
+                self._addr, packet.src, packet.flow, packet.id, 
+                self.res.env.now))
         # Send the packet      
         yield self.res.env.process(transport.send(packet))
 
@@ -1410,7 +1417,7 @@ class Transport(object):
         :return: transport handler
         :rtype: :class:`Transport`
         """
-        return Transport(self.link, 1 - self.direction)
+        return Transport(self._link, 1 - self._direction)
 
     def send(self, packet):
         """Send a packet across the link.

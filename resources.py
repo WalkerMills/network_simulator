@@ -32,24 +32,23 @@ class MonitoredEnvironment(simpy.Environment):
     and process-controlled monitoring.
 
     :param int initial_time: simulation time to start at
+    :param int step: registered value update period
     """
 
-    def __init__(self, initial_time=0):
+    def __init__(self, initial_time=0, step=100000000):
         super(MonitoredEnvironment, self).__init__(initial_time)
         # Dictionary mapping identifier -> [(time, monitored value)]
         self._monitored = dict()
         self._getters = dict()
-        self._step = 100000000
-        self._update_proc = self.process(self._update_registered())
+        self._step = step
 
-    def _update_registered(self):
-        """Update all registered getters."""
+    def _update_proc(self, name, getter, avg, nonzero, step):
+        """Process for periodically updating an identifier."""
         while True:
-            for name, (g, avg, nonzero) in self._getters.items():
-                value = g() / self._step**avg
-                if not nonzero or (nonzero and value != 0):
-                    self._monitored[name].append((self.now, value))
-            yield self.timeout(self._step)
+            value = getter() / step**avg
+            if not nonzero or (nonzero and value != 0):
+                self.update(name, value)
+            yield self.timeout(step)
 
     def monitored(self):
         """The timestamped values of all monitored attributes.
@@ -68,24 +67,28 @@ class MonitoredEnvironment(simpy.Environment):
         """
         return self._monitored[name]
 
-    def register(self, name, getter, avg=False, nonzero=False):
+    def register(self, name, getter, avg=False, nonzero=False, step=None):
         """Register a new identifier.
 
         If the avg flag is set, the return value of the getter is divided
         by the time step over which the update is performed, in order to
         yield an average.  If the nonzero flag is set, only nonzero values
-        are recorded.
+        are recorded.  The environment is initialized with a default step,
+        but the ``step`` parameter may override it for the given identifier.
 
         :param str name: identifier
         :param function getter: getter function
         :param bool avg: flag indicating whether to average the getter value
         :param bool nonzero: flag indicating whether data is nonzero
+        :param int step: update period for this identifier
         :return: None
         """
         if name in self._monitored.keys():
             raise ValueError('duplicate identifier \'{}\''.format(name))
-        self._getters[name] = (getter, avg, nonzero)
-        self._monitored[name] = list()
+        if step is None:
+            step = self._step
+        self._getters[name] = self.process(
+            self._update_proc(name, getter, avg, nonzero, step))
 
     def update(self, name, value):
         """Add a value for the specified identifier.
@@ -289,8 +292,6 @@ class LinkEnqueue(simpy.events.Event):
             buffer_._add_recent(direction, packet)
             # Set dropped flag to False
             dropped = False
-            buffer_.env.update("Link fill,{}".format(buffer_.id), 
-                               sum(len(q) for q in buffer_._queues))
         else:
             logger.info(
                 "link {} dropped packet {}, {}, {} at time {}\t{}".format(
@@ -357,14 +358,14 @@ class LinkBuffer(object):
         self._fill = [0.0, 0.0]
         # Number of dropped packets
         self._dropped = 0
-        # Size of the last packet transmitted in each direction
-        self.last_size = [Packet.size, Packet.size]
 
         # running total for buffer occupancy
         self._occupancy = 0
         self._avg_fill = 0
         self._last_update = 0
 
+        self.env.register("Link fill,{}".format(self.id), 
+                          lambda: sum(len(q) for q in self._queues))
         # Bind event constructors as methods
         simpy.core.BoundClass.bind_early(self)
 
@@ -423,7 +424,7 @@ class LinkBuffer(object):
         :return: free buffer space (bits)
         :rtype: int
         """
-        return self._size - self._fill[direction]
+        return self.size - self._fill[direction]
 
     def _enqueue(self, event):
         """Finish an equeuing."""
@@ -443,23 +444,6 @@ class LinkBuffer(object):
             raise ValueError("not enough data in buffer")
         # Update fill
         self._fill[direction] += delta
-
-    def update_buffered(self, direction, time):
-        """Update the total buffer occupancy.
-
-        :param int direction: link direction
-        :param int time: time of the update
-        :return: None
-        """
-        diff = self._last_update - time
-        if diff >= self._time:
-            self._avg_fill = self._occupancy / diff
-            self._occupancy = 0
-        else:
-            self._occupancy += len(self._queues[direction])
-        #logger.debug("*****occupancy: {}, fill: {}".format(
-        #            self._occupancy, self._avg_fill))
-
 
     def buffered(self):
         """Total number of packets in link buffers.
@@ -481,11 +465,6 @@ class LinkBuffer(object):
             packet = self._queues[direction].popleft()
             # Decrement buffer fill
             self._update_fill(direction, -packet.size)
-            # Update last packet size
-            self.last_size[direction] = packet.size
-            if not isinstance(packet, Routing):
-                # Set buffer exit time
-                self._recent[direction][packet][1] = self.env.now
         except IndexError:
             # If there is no packet to dequeue, set packet to None
             packet = None
@@ -500,29 +479,20 @@ class LinkBuffer(object):
         """
         return self._fill[direction] / self._size
 
-    def queued(self, direction):
-        """Estimated number of queued packets.
-
-        This value is calculated using Little's law, which tells us that
-        the expected number of queued packets is equal to the rate at
-        which packets arrive, and the average amount of time each packet
-        spends in the buffer.
+    def update_buffered(self, direction, time):
+        """Update the total buffer occupancy.
 
         :param int direction: link direction
-        :return: estimated number of queued packets
-        :rtype: int
+        :param int time: time of the update
+        :return: None
         """
-        times = list(sorted(filter(
-            lambda t: t[1], 
-            self._recent[direction].values())))
-        if len(times) == 1:
-            return 1
-        elif len(times) > 1:
-            rate = len(times) / (times[-1][0] - times[0][0])
-            delay = sum(t[1] - t[0] for t in times) / len(times)
-            return rate * delay
+        diff = self._last_update - time
+        if diff >= self._time:
+            self._avg_fill = self._occupancy / diff
+            self._occupancy = 0
+            logger.warning('resetting buffer occupancy')
         else:
-            return 0
+            self._occupancy += len(self._queues[direction])
 
 
 class ReceivePacket(simpy.events.Event):

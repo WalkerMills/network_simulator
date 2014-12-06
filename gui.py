@@ -499,6 +499,3 @@ def draw():
     # Run GUI
     tkinter.mainloop()
     return canvas.links, canvas.flows
-
-if __name__ == "__main__":
-    draw()

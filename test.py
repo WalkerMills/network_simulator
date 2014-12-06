@@ -6,6 +6,7 @@
 
 import enum
 import heapq
+import logging
 import numpy as np
 import simpy
 
@@ -13,6 +14,9 @@ from matplotlib import pyplot as plt
 
 import network
 import process
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
 
 
 @enum.unique
@@ -108,89 +112,135 @@ class TestCase(object):
         # Return adjacency lists of edges & initialized flows
         return cls.adjacencies[case][0], flows
 
-def run(adjacent, tcp="FAST", until=None, graph=True):
-    """Runs the simulation with the given parameters. 
 
-    If the graph parameter is True, this method also displays graphs for
-    the monitored value.  The return value of this function is a dictionary
-    mapping identifier groupings to sets of datasets.  For example, if there
-    are entries for \"Link fill,0\" & \"Link fill,1\", in the raw output
-    of monitored values, these would be one key in the output, \"Link
-    fill\", mapped to a list of two datasets.
+class Graph(object):
 
-    :param adjacent: adjacency lists of links & flows defining a network
-    :type adjacent: ([((str, str), (int, int, int))], 
-        [((str, str), ((int, int), (str, list)))]), or :class:`test.Case`
-    :param str tcp: TCP specifier. Used iff adjacent is a :class:`test.Case`
-    :param until_: time or event to run the simulation until
-    :type until_: int or ``simpy.events.Event``
-    :param bool graph: graphing flag; graphs output if True
-    :return: dict mapping identifier group to set of datasets
-    :rtype: {str: [[(int, float)]]}
-    """
-    sorted_data = dict()
-
-    n = network.Network(adjacent, tcp)
-    data = n.simulate(until)
-
-    for key, value in data.items():
-        separated = key.split(',')
-        title = separated[0]
-        if title not in sorted_data.keys():
-            sorted_data[title] = list()
-        # creates new dictionary of tuples which contain 
-        # data points w/ unique host-flow identifier
-        sorted_data[title].append((', '.join(separated[1:]), value))
-
-    if graph:
-        graph_data(sorted_data)
-    return sorted_data
-
-def graph_data(sorted_data, save_=False):
-    """Graph the data outputted by :func:`run`.
-
-    :param dict sorted_data: data of the form outputted by :func:`run`
-    :param bool save_: flag indicating whether to save or display graphs
-    :return: None
-    """
-    graph_args = {"Flow received": ["flow", "Mbps", False, 1000],
-                  "Flow transmitted": ["flow", "Mbps", False, 1000],
-                  "Round trip times": ["flow", "ms"],
-                  "Host transmitted": ["host", "Mbps", False, 1000],
-                  "Host received": ["host", "Mbps", False, 1000],
+    title_args = {"Flow received": ["flow", "Mbps", 1000],
+                  "Flow transmitted": ["flow", "Mbps", 1000],
+                  "Round trip times": ["flow", "ms", 1e-6],
+                  "Host transmitted": ["host", "Mbps", 1000],
+                  "Host received": ["host", "Mbps", 1000],
                   "Link fill": ["link", "packets"],
                   "Dropped packets": ["link", "packets"],
-                  "Link transmitted": ["link", "Mbps", False, 1000],
+                  "Link transmitted": ["link", "Mbps", 1000],
                   "Window size": ["flow", "packets"],
-                  "Queuing delay": ["flow", "ns"]}
+                  "Queuing delay": ["flow", "ms", 1e-6]}
+    """Maps graph title to :meth:`graph` parameters."""
 
-    for key, value in sorted_data.items():
-        _graph(key, value, *graph_args[key], save=save_)
+    def __init__(self, adjacent, tcp="FAST", until=None, graph=True, 
+                 tags=None):
+        # Store graphing flag
+        self._graph = graph
+        # Data sets grouped by window title (data category)
+        self._data = dict()
+        # Create a network simulation with the given parameters
+        n = network.Network(adjacent, tcp)
+        # Run the simulation, and get the monitored values
+        monitored = n.simulate(until)
+        # For each monitored value
+        for key, raw in monitored.items():
+            # Extract the monitored title & identifying tags
+            title, *tags = key.split(',')
+            # If this is the first value of this category processed
+            if title not in self._data.keys():
+                # Create a new entry for its category
+                self._data[title] = list()
+            # Extract the time & value data from the raw data
+            time, value = np.transpose(np.array(raw, dtype=float))
+            # Scale time from nanoseconds to milliseconds
+            time /= 1e6
+            # Append the tagged data set to the data for this category
+            self._data[title].append((tuple(tags), time, value))
 
-def _graph(title, data, legend, y_label, derive=False, scale=1, save=False):
-    """Graph a set of datasets."""
-    fig = plt.figure()
-    fig.suptitle(title)
-    plt.xlabel("simulation time (ns)")
-    plt.ylabel(y_label)
+    @property
+    def titles(self):
+        """Data categories.
 
-    for dataset in data:
-        arr = np.asarray(dataset[1])
-        x, y = np.transpose(arr)
-        y = [value * scale for value in y]
+        :return: list of data categories
+        :rtype: [str]
+        """
+        return list(self._data.keys())
 
-        if derive:
-            y = np.gradient(y)
-        plt.plot(x, y, label="{} {}".format(legend, dataset[0]))
+    def graph(self, title, datasets, legend, y_label, scale=1.0):
+        """Graph a set of data sets.
 
-    # may need to insert legend here
-    plt.legend()
-    if save:
-        plt.savefig(title + ".png")
-    else:
-        plt.show()
-    plt.close('all')
+        :param str title: graph title
+        :param datasets: a list of tagged data sets given as (tags, x, y)
+        :type datasets: [(tuple, ``numpy.ndarray``, ``numpy.ndarray``)]
+        :param str legend: individual data set title for the plot legend
+        :param str y_label: label for the plot\'s y axis
+        :param float scale: y is multiplied by ``scale`` before graphing
+        """
+        # Get a new figure
+        fig = plt.figure()
+        # Set window title
+        fig.suptitle(title)
+        # Label the x axis 
+        plt.xlabel("Time (ms)")
+        # Label the y axis
+        plt.ylabel(y_label)
+        # For each tagged dataset
+        for tags, x, y in datasets:
+            y *= scale
+            # Plot the data set, and make a legend entry for it
+            plt.plot(x, y, label="{} {}".format(legend, ','.join(tags)))
+        # Create the plot legend
+        plt.legend()
+        # If the graphing flag is set
+        if self._graph:
+            # Graph the data
+            plt.show()
+        else:
+            # Save the plot
+            plt.savefig(title + ".png")
+        # Close all figures
+        plt.close('all')
 
-    
+    def graph_all(self, tags=None):
+        """Graph all data sets.
 
+        If the ``tags`` parameter is given, graphical output for data
+        sets whose title is a key in ``tags`` will be restricted to data
+        sets with the specified tags.
 
+        :param dict tags: dictionary mapping titles to data set tags
+        :return: None
+        """
+        self.graph_titles(self._data.keys(), tags)
+
+    def graph_titles(self, titles, tags=None):
+        """Graph sets of data sets by category title.
+
+        If the ``tags`` parameter is given, graphical output for data
+        sets whose title is a key in ``tags`` will be restricted to data
+        sets with the specified tags.
+
+        :param list titles: titles of data categories to graph
+        :param dict tags: dictionary mapping titles to data set tags
+        :return: None
+        """
+        # For each title
+        for title in titles:
+            # Fetch the specified set of data sets
+            datasets = self._data[title]
+            # If this title exists in the tags dict
+            if tags is not None and title in tags.keys():
+                # Filter the data sets to those with the given tags
+                datasets = [d for d in datasets if d[0] in tags[title]]
+                tag_msg = " with tags {}".format(tags[title])
+            else:
+                tag_msg = str()
+            # Check if there exist any data sets
+            if not datasets:
+                logger.warning(
+                    "No data sets found for \"{}\"{}".format(title, tag_msg))
+                # Do not graph null sets
+                continue
+            try:
+                # Get the graphing parameters for this data category
+                args = self.title_args[title]
+            except KeyError:
+                # If none were found, make empty legend & y axis labels
+                args = [str(), str()]
+            # Graph the data sets
+            self.graph(title, datasets, *args)
