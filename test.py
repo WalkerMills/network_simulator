@@ -38,7 +38,7 @@ TWO = Case.two
 """Convenience alias for test case 2 (type)."""
 
 
-class TestCase(object):
+class TestCase:
     """Factory class for producing test case adjacency lists.
 
     See ``adjacent`` for details.
@@ -70,14 +70,14 @@ class TestCase(object):
     """Edge & flow adjacency lists for each test case."""
 
     tcp_parameters = {
-        Case.zero: {'FAST': [[1, 30000000, 32]], 'Reno': [[1, 40000000]]}, 
-        Case.one: {'FAST': [[1, 120000000, 20]], 'Reno': [[1, 160000000]]},
+        Case.zero: {'FAST': [[1, 30000000, 45]], 'Reno': [[1, 30000000]]}, 
+        Case.one: {'FAST': [[1, 120000000, 20]], 'Reno': [[1, 120000000]]},
         Case.two: {'FAST': [[1, 150000000, 6], 
                             [1, 90000000, 6],
                             [1, 90000000, 6]],
-                   'Reno': [[1, 2000000000], 
-                            [1, 120000000],
-                            [1, 120000000]]}
+                   'Reno': [[1, 1500000000], 
+                            [1, 90000000],
+                            [1, 90000000]]}
     }
     """TCP parameters for each test case."""
 
@@ -113,7 +113,7 @@ class TestCase(object):
         return cls.adjacencies[case][0], flows
 
 
-class Graph(object):
+class Graph:
 
     title_args = {"Flow received": ["flow", "Mbps", 1000],
                   "Flow transmitted": ["flow", "Mbps", 1000],

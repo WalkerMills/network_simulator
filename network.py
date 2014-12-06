@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
-class Network(object):
+class Network:
     """This class encapsulates a network simulation.
 
     If network is None, then a GUI for drawing a network appears.  The

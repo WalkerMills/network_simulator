@@ -22,7 +22,7 @@ UP = 1
 """Upload diretion."""
 
 
-class MonitoredEnvironment(simpy.Environment):
+class MonitoredEnvironment(simpy.core.Environment):
     """SimPy environment with monitoring.
 
     Processes may register identifiers, along with a getter (function)
@@ -105,7 +105,7 @@ class MonitoredEnvironment(simpy.Environment):
             self._monitored[name] = [(self.now, value)]
 
 
-class Packet(object):
+class Packet:
     """This class represents a packet in our simulation.
 
     :param src: source host
@@ -324,7 +324,7 @@ class LinkEnqueue(simpy.events.Event):
         return self._direction
 
 
-class LinkBuffer(object):
+class LinkBuffer:
     """SimPy resource representing a link's buffers.
 
     This class is a full-duplex link implemented as a resource.  Packet
@@ -530,7 +530,7 @@ class ReceivePacket(simpy.events.Event):
     cancel = __exit__
 
 
-class PacketQueue(object):
+class PacketQueue:
     """SimPy resource for queuing packets.
 
     This class is a FIFO SimPy resource. It receives packets, but does not
