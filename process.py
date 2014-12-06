@@ -466,13 +466,13 @@ class Reno(TCP):
         # if in congestion avoidance phase
         elif self._CA == True:
             logger.debug("congestion avoidance {}".format(self.window))
-            # If we have 3 duplicate ACK's
+            # If we have 3 duplicate ACK's, perform fast retransmission
             if self._next.count(self._next[0]) == self._next.maxlen:
-                # enter fast transmit mode
+                # Set slow start threshold to half of the window size
                 self._ssthrsh = self.window / 2
-                self.window = self._ssthrsh + 3
-                # set flag so flow is in fast recovery mode until all
-                # transmitted packets are acknowledged
+                # Set window size to the threshold + number of duplicates
+                self.window = self._ssthrsh + self._next.maxlen - 1
+                # Enter fast recovery mode
                 self._fast_recovery = True
                 self._CA = False
                 # Get the dropped packet
@@ -943,6 +943,8 @@ class Link:
         # Buffer flushing processes
         self._flush_proc = (self.env.process(self._flush(resources.UP)),
                             self.env.process(self._flush(resources.DOWN)))
+        # Time to wait between buffer pops if the buffer was empty
+        self._flush_wait = 1000000 # 1 ms
 
         self.env.register("Link transmitted,{}".format(self._res.id),
                               lambda: self._reset("_transmitted"), True)
@@ -995,13 +997,18 @@ class Link:
     def _flush(self, direction):
         """Flush packets from the buffer at the link rate."""
         while True:
+            # Dequeue a packet from the correct buffer
             packet = self._res.dequeue(direction)
+            # If we got a packet
             if packet is not None:
+                # Limit transmission speed to link bitrate
                 yield self.env.timeout(
                     packet.size * 1e9 / self._capacity)
+                # Transmit the packet to the conected endpoint
                 self.env.process(self._transmit(direction, packet))
             else:
-                yield self.env.timeout(1000000)
+                # Otherwise, wait 1 ms and try again
+                yield self.env.timeout(self._flush_wait)
 
     def _reset(self, attr):
         """Get the value of the specified attribute, and reset it to 0."""
@@ -1024,8 +1031,6 @@ class Link:
             "link {} transmitting packet {}, {}, {} at time {}".format(
                 self._res.id, packet.src, packet.flow, packet.id, 
                 self.env.now))
-        # update average of buffer fill
-        self._res.update_buffered(direction, self.env.now)
         # Transmit packet after waiting, as if sending the packet
         # across a physical link
         yield simpy.util.start_delayed(self.env,
@@ -1062,7 +1067,7 @@ class Link:
 
         """
         return self._delay / math.log(self._capacity / resources.Packet.size) \
-            + self._res.buffered()
+            + self._res.buffered(direction)
 
     def disconnect(self):
         """Disconnect a link from its two endpoints.
@@ -1089,6 +1094,9 @@ class Link:
         """
         # Enqueue the new packet, and get the dropped status
         dropped = yield self._res.enqueue(direction, packet)
+        if not dropped:
+            # update total buffer fill
+            self._res.update_buffered(direction, self.env.now)
 
 
 class Router:
@@ -1121,10 +1129,10 @@ class Router:
         self._last_arrival = float('inf')
         # Flag indicating if router has converged
         self._converged = False
-        # timeout duration used to set routing table to recent update
-        self._timeout = 50000000 #every 0.5s
-        # timeout duration used to set frequency of routing table updates
-        self._bf_period = 5000000000 #every 5s
+        # timeout duration used to determine routing table convergence
+        self._timeout = 50000000 # 50 ms
+        # routing update period (only relevant for routers connected to hosts)
+        self._bf_period = 5000000000 # 5 s
 
     @property
     def addr(self):
@@ -1144,31 +1152,31 @@ class Router:
         """
         return self._res.env
 
+    @property
+    def routers(self):
+        """Transport handlers connected to routers.
+
+        :return: a list of outbound transport handlers
+        :rtype: [:class:`Transport`]
+        """
+        return [t for t in self._links 
+                if Host not in map(type, t.link.endpoints)]
+
     def _broadcast_packet(self, host, cost, path, rec_port):
         """Broadcast a routing packet."""
-
+        # Update the routing path
+        new_path = path + [self._addr]
         # create a new routing packet for each outbound link that's
-        # not a host and adjust the cost for each link
-        for transport in self._links:
-            # don't send routing packets to hosts or to the router
-            # that sent the recently received packet.
-            if Host in map(type, transport.link.endpoints) or \
-                transport == rec_port:
+        # not connected a host
+        for t in self.routers:
+            if t == rec_port:
                 continue
-
-            # update packet path and cost
-            #new_path = path + [self._addr]
-            #new_cost = cost + transport.cost
-            # create reference to outbound port for this router on the 
-            # router receiving the packet 
-            #new_port = transport.reverse()
-            # create new packet
-            new_pkt = resources.Routing((host, cost + transport.cost, 
-                path + [self._addr], transport.reverse()))
-            # send the newly created packet
+            # Create a new routing packet with updated rounting information
+            r = resources.Routing((host, cost + t.cost, new_path, t.reverse()))
             logger.debug("R{} broadcasting on L{}".format(self._addr,
-                        transport.link.id))
-            yield self.env.process(self.transmit(new_pkt, transport))
+                                                          t.link.id))
+            # send the newly created packet
+            yield self.env.process(self.transmit(r, t))
 
     def _handle_routing_packet(self, packet):
         """Handle a routing or finish packet."""
@@ -1180,7 +1188,6 @@ class Router:
             self._finish_table[transport] = True
         # if it's a normal routing packet
         else: 
-            #logger.debug('processing routing packet')
             # extract data from payload
             host, cost, path, rec_port = packet.data
             # update last arrival time of packet
@@ -1188,7 +1195,6 @@ class Router:
             # if packet has already gone through router, ignore it
             if self._addr in path:
                 return     
-
             # update new routing table if host isn't in table
             if not (host in self._update_table.keys()):
                 self._update_table[host] = (rec_port, cost)
@@ -1196,7 +1202,6 @@ class Router:
                     self._addr, rec_port.link.id, cost, host))
                 yield self.env.process(
                     self._broadcast_packet(host, cost, path, rec_port))
-
             # update new routing table if there's a more efficient path
             if self._update_table[host][1] > cost:
                 logger.debug(
@@ -1206,25 +1211,20 @@ class Router:
                 self._update_table[host] = (rec_port, cost)
                 yield self.env.process(
                     self._broadcast_packet(host, cost, path, rec_port))
-               
             # after receiving a routing packet, begin update timeout
             yield self.env.timeout(self._timeout)
-
             # check to see if router has reached threshold (for the first time)
             if self.env.now >= self._last_arrival + self._timeout and \
                 not self._converged:
                 # set flag
                 self._converged = True
-                logger.debug("router {} self converged".format(self._addr))
-                # and send Finish packets to neighboring routers
-                # not connected to hosts
-                for t in [T for T in self._links 
-                          if Host not in map(type, T.link.endpoints)]:
-                    #create reference to outbound port for this router 
-                    #on the router recieving the packet
-                    transport_ref = t.reverse()
-                    new_pkt = resources.Finish(transport_ref)
-                    yield self.env.process(self.transmit(new_pkt, t))
+                logger.debug("router {} locally converged".format(self._addr))
+                # For each neighboring router
+                for t in self.routers:
+                    # Send a Finish packet pointing to this router to inform
+                    # them that this router has converged
+                    yield self.env.process(
+                        self.transmit(resources.Finish(t.reverse()), t))
 
         # check for one degree of convergence (this router and neighbors)
         if self._converged and all(self._finish_table.values()):
@@ -1259,17 +1259,18 @@ class Router:
                     # check for any direct connections to hosts
                     if Host in map(type, transport.link.endpoints):
                         logger.debug('Bellman-Ford routing table update')
-                        new_host = next(filter(lambda e: type(e) == Host,
-                                               transport.link.endpoints))
+                        host = next(filter(lambda e: type(e) == Host,
+                                           transport.link.endpoints))
                         # update routing table for this router
-                        self._update_table[new_host.addr] = (transport, 
+                        self._update_table[host.addr] = (transport, 
                                                              transport.cost)
-                        # get list of transport handlers not connected to hosts
-                        for t in [T for T in self._links 
-                                  if Host not in map(type, T.link.endpoints)]:
+                        # For each connected router
+                        for t in self.routers:
+                            # Create routing packet for the connected host
                             packet = resources.Routing(
-                                (new_host.addr, transport.cost + t.cost, 
+                                (host.addr, transport.cost + t.cost, 
                                  [self._addr], t.reverse()))
+                            # Send the routing packet
                             yield self.env.process(
                                 self.transmit(packet, t))
                     else:
@@ -1345,10 +1346,8 @@ class Router:
                 self.env.now))
         # Send the packet      
         yield self.env.process(transport.send(packet))
-
-#TODO:
-#edit docstrings/style 
-#edit logger statements
+        # Wait packet size / link rate before terminating
+        yield self.env.timeout(packet.size * 1e9 / transport.capacity)
 
 
 class Transport:
