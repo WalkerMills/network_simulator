@@ -489,6 +489,8 @@ class NetworkInput(tkinter.Frame):
 def draw():
     """Draw the network configuration GUI.
 
+    See :class:`test.Network` for details on the output format.
+
     :return: returns drawn network as (adjacency list, flows)
     :rtype: (list, list)
     """

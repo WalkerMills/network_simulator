@@ -400,7 +400,7 @@ class Reno(TCP):
         # Maximum timeout (64 sec)
         self._max_time = 64000000000
         # Slow start threshold
-        self._ssthrsh = 32
+        self._threshold = 32
         # Next ID's expected by the destination host.  Last 4 are cached to
         # check for packet dropping (3 duplicate ACK's)
         self._next = deque(maxlen=4)
@@ -412,11 +412,11 @@ class Reno(TCP):
         try:
             # Wait for acknowledgement(s)
             yield self.flow.env.timeout(self.timeout)
-            logger.info("timeout occurred".format(self.window))
+            logger.debug("timeout occurred".format(self.window))
             # Retransmit dropped packets
             yield self.flow.env.process(self.burst(timeout=True))
             # Set the slow start threshold to half the window size
-            self._ssthrsh = max(self.window / 2, 1)
+            self._threshold = max(self.window / 2, 1)
             # Reset window size
             self.window = 1
             # Update monitored window size
@@ -458,9 +458,9 @@ class Reno(TCP):
         #if in slow start phase
         if self._slow_start == True:
             self.window += 1
-            logger.debug("slow start {}, ssthrsh {}".format(self.window,
-                                                              self._ssthrsh))
-            if self.window >= self._ssthrsh:
+            logger.debug("slow start {} < {}".format(self.window, 
+                                                     self._threshold))
+            if self.window >= self._threshold:
                 self._slow_start = False
                 self._CA = True
         # if in congestion avoidance phase
@@ -469,9 +469,9 @@ class Reno(TCP):
             # If we have 3 duplicate ACK's, perform fast retransmission
             if self._next.count(self._next[0]) == self._next.maxlen:
                 # Set slow start threshold to half of the window size
-                self._ssthrsh = self.window / 2
+                self._threshold = self.window / 2
                 # Set window size to the threshold + number of duplicates
-                self.window = self._ssthrsh + self._next.maxlen - 1
+                self.window = self._threshold + self._next.maxlen - 1
                 # Enter fast recovery mode
                 self._fast_recovery = True
                 self._CA = False
@@ -666,10 +666,23 @@ class Flow:
             avg = self._mean_rtt
         return avg
 
-    def _reset(self, attr):
-        """Get the value of the specified attribute, and reset it to 0."""
-        ret = getattr(self, attr)
-        setattr(self, attr, 0)
+    def _reset(self, attr, index=None):
+        """Get the value of the specified attribute, and reset it."""
+        if index is not None:
+            # Get the value of the attribute
+            val = getattr(self, attr)
+            # Extract the return value
+            ret = val[index]
+            # Reset the replacement value at the index
+            val[index] = type(ret)()
+        else:
+            # Get the return value
+            ret = getattr(self, attr)
+            # Reset the replacement value
+            val = type(ret)()
+        # Replace the value of the attribute
+        setattr(self, attr, val)
+        # Return the original value
         return ret
 
     def _update_rtt(self, pid):
@@ -934,20 +947,24 @@ class Link:
 
         # Endpoints for each direction
         self._endpoints = [None, None]
-        # "Upload" handler
-        self._up = Transport(self, resources.UP)
         # "Download" handler
         self._down = Transport(self, resources.DOWN)
+        # "Upload" handler
+        self._up = Transport(self, resources.UP)
         # Total number of bits transmitted by link
-        self._transmitted = 0
+        self._transmitted = [0, 0]
         # Buffer flushing processes
-        self._flush_proc = (self.env.process(self._flush(resources.UP)),
-                            self.env.process(self._flush(resources.DOWN)))
+        self._flush_proc = (self.env.process(self._flush(resources.DOWN)),
+                            self.env.process(self._flush(resources.UP)))
         # Time to wait between buffer pops if the buffer was empty
         self._flush_wait = 1000000 # 1 ms
 
-        self.env.register("Link transmitted,{}".format(self._res.id),
-                              lambda: self._reset("_transmitted"), True)
+        self.env.register(
+            "Link transmitted,{},{}".format(self._res.id, resources.DOWN),
+            lambda: self._reset("_transmitted", resources.DOWN), True)
+        self.env.register(
+            "Link transmitted,{},{}".format(self._res.id, resources.UP),
+            lambda: self._reset("_transmitted", resources.UP), True)
 
     @property
     def capacity(self):
@@ -1010,10 +1027,23 @@ class Link:
                 # Otherwise, wait 1 ms and try again
                 yield self.env.timeout(self._flush_wait)
 
-    def _reset(self, attr):
-        """Get the value of the specified attribute, and reset it to 0."""
-        ret = getattr(self, attr)
-        setattr(self, attr, 0)
+    def _reset(self, attr, index=None):
+        """Get the value of the specified attribute, and reset."""
+        if index is not None:
+            # Get the value of the attribute
+            val = getattr(self, attr)
+            # Extract the return value
+            ret = val[index]
+            # Reset the replacement value at the index
+            val[index] = type(ret)()
+        else:
+            # Get the return value
+            ret = getattr(self, attr)
+            # Reset the replacement value
+            val = type(ret)()
+        # Replace the value of the attribute
+        setattr(self, attr, val)
+        # Return the original value
         return ret
 
     def _transmit(self, direction, packet):
@@ -1036,7 +1066,7 @@ class Link:
         yield simpy.util.start_delayed(self.env,
             self._endpoints[direction].receive(packet), self._delay)
         # Update total bits transmitted by link
-        self._transmitted += packet.size
+        self._transmitted[direction] += packet.size
 
     def connect(self, A, B):
         """Connect two network components via this link.
