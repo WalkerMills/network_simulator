@@ -117,8 +117,7 @@ class MonitoredEnvironment(simpy.core.Environment):
 class Packet:
     """This class represents a packet in our simulation.
 
-    :param src: source host
-    :type src: :class:`process.Host`
+    :param int src: source host id
     :param int dest: destination address
     :param int fid: source flow id
     :param int pid: packet id
@@ -143,7 +142,7 @@ class Packet:
 
     @property
     def src(self):
-        """Return the packet's source address.
+        """The packet's source address.
 
         :return: source address
         :rtype: int
@@ -152,7 +151,7 @@ class Packet:
 
     @property
     def dest(self):
-        """Return the packet's destination address.
+        """The packet's destination address.
 
         :return: destination address
         :rtype: int
@@ -161,7 +160,7 @@ class Packet:
 
     @property
     def flow(self):
-        """Return the ID of the sender (flow) on the source host.
+        """The ID of the sender (flow) on the source host.
 
         :return: flow ID on localhost
         :rtype: int
@@ -170,26 +169,16 @@ class Packet:
 
     @property
     def id(self):
-        """Return the ID of this packet.
+        """The ID of this packet.
 
         :return: packet ID for the source flow
         :rtype: int
         """
         return self._id
 
-    # @id.setter
-    def set_id(self, value):
-        """Sets this packet's ID to a new value
-
-        :param function value: new value of the ID
-        :return: None
-        """
-        #logger.debug("setter called")
-        self._id = value
-
     @property
     def data(self):
-        """Return this packet's payload of data.
+        """The packet's payload of data.
 
         :return: the payload of this packet
         :rtype: object
@@ -209,8 +198,7 @@ class Packet:
 class ACK(Packet):
     """This class represents an acknowledgement packet.
 
-    :param src: source host
-    :type src: :class:`process.Host`
+    :param int src: source host id
     :param int dest: destination address
     :param int fid: source flow id
     :param int pid: packet id
@@ -260,8 +248,9 @@ class Routing(Packet):
 class Finish(Routing):
     """This class represents a finish packet.
 
-    Finish packets are used to communicate the termination condition
-    for dynamic routing.
+    Finish packets communicate that a router has locally converged, and
+    are used to signal the termination condition for Bellman-Ford
+    dynamic routing.
 
     :param object payload: packet payload
     """
@@ -271,7 +260,8 @@ class LinkEnqueue(simpy.events.Event):
     """SimPy event representing packet buffering.
 
     This event represents the enqueuing of a packet in one of a link's
-    two buffers, as specified by ``direction``
+    two buffers, as specified by ``direction``.  This event may also be
+    used as a context manager.
 
     :param buffer_: the buffer that this enqueuing event binds to
     :type buffer_: :class:`LinkBuffer`
@@ -320,10 +310,11 @@ class LinkBuffer:
     """SimPy resource representing a link's buffers.
 
     This class is a full-duplex link implemented as a resource.  Packet
-    transmission is parametrized by direction, and each link has two
-    allowed directions (0 or 1), each of which has a dedicated buffer.
-    New packets are added to the appropriate buffer, to be dequeued
-    by the :class:`process.Link` that owns the resource instance.
+    transmission is parametrized by direction, and every link has two
+    allowed directions (:data:`resources.DOWN` or :data:`resources.UP`),
+    each of which has a dedicated buffer.  New packets are added to the
+    appropriate buffer, to be dequeued by the :class:`process.Link` that
+    owns the resource instance.
 
     :param simpy.Environment env: the simulation environment
     :param int size: link buffer size, in bits
@@ -352,7 +343,19 @@ class LinkBuffer:
         simpy.core.BoundClass.bind_early(self)
 
     enqueue = simpy.core.BoundClass(LinkEnqueue)
-    """Enqueue a packet in the specified direction."""
+    """Enqueue a packet in the specified direction.
+
+    This is a SimPy event, which is bound as a method to each ``LinkBuffer``
+    object upon its instantiation.  When this event is yielded, it also
+    returns a flag whose truth value indicates whether the packet was
+    dropped (buffer was full) or not.
+
+    :param int direction: link direction
+    :param packet: packet to enqueue
+    :type packet: :class:`Packet`
+    :return: dropped flag
+    :rtype: bool
+    """
 
     @property
     def id(self):
@@ -361,7 +364,7 @@ class LinkBuffer:
 
     @property
     def dropped(self):
-        """The number of dropped packets
+        """The number of dropped packets.
 
         :return: dropped packets
         :rtype: int
@@ -406,9 +409,10 @@ class LinkBuffer:
         self._fill[direction] += delta
 
     def buffered(self, direction):
-        """Total number of packets in link buffers.
+        """Cumulative number of packets in a link buffer.
 
-        :return: total buffer occupancy
+        :param int direction: link direction
+        :return: cumulative buffer occupancy
         :rtype: int
         """
         return self._occupancy[direction]
@@ -430,17 +434,8 @@ class LinkBuffer:
             packet = None
         return packet
 
-    def fill(self, direction):
-        """Returns the proportion of the buffer which is filled.
-
-        :param int direction: link direction
-        :return: buffer fill as a proportion of buffer size
-        :rtype: float
-        """
-        return self._fill[direction] / self._size
-
     def update_buffered(self, direction, time):
-        """Update the total buffer occupancy.
+        """Update the cumulative buffer occupancy.
 
         :param int direction: link direction
         :param int time: time of the update
@@ -507,7 +502,18 @@ class PacketQueue:
         simpy.core.BoundClass.bind_early(self)
 
     receive = simpy.core.BoundClass(ReceivePacket)
-    """Receive a packet."""
+    """Receive a packet.
+
+    This is a SimPy event, which is bound as a method to each ``PacketQueue``
+    object upon its instantiation.  When this event is yielded, it also
+    returns a packet popped from the queue.
+
+    :param int direction: link direction
+    :param packet: packet to enqueue
+    :type packet: :class:`Packet`
+    :return: a dequeued packet
+    :rtype: :class:`Packet`
+    """
 
     @property
     def addr(self):

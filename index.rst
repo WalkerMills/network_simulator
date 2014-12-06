@@ -6,6 +6,5 @@ CS143 Network Simulator
 
    doc/resources
    doc/process
-   doc/network
    doc/gui
    doc/test

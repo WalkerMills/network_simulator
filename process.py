@@ -21,6 +21,17 @@ logger.setLevel(logging.INFO)
 
 
 class TCP(metaclass=abc.ABCMeta):
+    """TCP algorithm abstract base class.
+
+    This class defines a number of properties & utility functions for
+    use by subclasses, as well as a mostly abstract API for use by the
+    :class:`Flow` class.
+
+    :param flow: the flow to link this TCP instance to
+    :type flow: :class:`Flow`
+    :param int window: initial window size (packets)
+    :param int timeout: packet acknowledgement timeout (ns)
+    """
 
     def __init__(self, flow, window, timeout):
         # The flow running this TCP algorithm
@@ -36,17 +47,6 @@ class TCP(metaclass=abc.ABCMeta):
         self._unacknowledged = dict()
         # Finish event
         self._finished = simpy.events.Event(self._flow.env)
-
-    @property
-    def unacknowledged(self):
-        """Unacknowledged packet dictionary.
-
-        This dictionary maps unackowledged packets to their departure time.
-
-        :return: unackowledged packets
-        :rtype: dict
-        """
-        return self._unacknowledged
 
     @property
     def finished(self):
@@ -71,10 +71,10 @@ class TCP(metaclass=abc.ABCMeta):
 
     @property
     def timed_out(self):
-        """Get a list of timed out packets.
+        """List of timed out packets.
 
-        :return: list of timed out packets
-        :rtype: list
+        :return: timed out packets
+        :rtype: [:class:`resources.Packet`]
         """
         return [p for p, t in self._unacknowledged.items() 
                 if t <= self.flow.env.now - self._timeout]
@@ -83,7 +83,7 @@ class TCP(metaclass=abc.ABCMeta):
     def timeout(self):
         """The time after which packets are considered dropped.
 
-        :return: acknowledgement timeout (simulation time)
+        :return: acknowledgement timeout (ns)
         :rtype: int
         """
         return self._timeout
@@ -101,8 +101,19 @@ class TCP(metaclass=abc.ABCMeta):
         self._timeout = max(timeout, 1)
 
     @property
+    def unacknowledged(self):
+        """Unacknowledged packet dictionary.
+
+        This dictionary maps unackowledged packets to their departure time.
+
+        :return: unackowledged packets
+        :rtype: {:class:`resources.Packet`: int}
+        """
+        return self._unacknowledged
+
+    @property
     def window(self):
-        """Transmission window size, in bits.
+        """Transmission window size (bits).
 
         :return: window size (bits)
         :rtype: int
@@ -204,7 +215,7 @@ class FAST(TCP):
     :param flow: the flow to link this TCP instance to
     :type flow: :class:`Flow`
     :param int window: initial window size (packets)
-    :param int timeout: packet acknowledgement timeout (simulation time)
+    :param int timeout: packet acknowledgement timeout (ns)
     :param int alpha: desired number of enqueued packets at equilibrium
     :param float gamma: window update weight
     """
@@ -316,8 +327,8 @@ class FAST(TCP):
     def burst(self, recover=False):
         """Inject packets into the network.
 
-        If recover is True, then the packets are taken from the dropped
-        packet queue.
+        If recover is True, then the packets are taken from the set of
+        timed out packets.
 
         :param bool recover: flag for recovery mode
         :return: None
@@ -383,7 +394,7 @@ class FAST(TCP):
 class Reno(TCP):
     """SimPy process implementing TCP Reno.
 
-    :param flow: the flow that is using TCP Reno
+    :param flow: the flow to link this TCP instance to
     :type flow: :class:`Flow`
     :param int window: initial window size (in packets)
     :param int timeout: packet acknowledgement timeout
@@ -542,7 +553,7 @@ class Flow:
 
     Each flow process is connected to a source host, and generates as
     many packets as are necessary to send all of its data.  If data is
-    None, a random, 8-bit number of packets are sent.  Every flow needs
+    None, a random, 12-bit number of packets are sent.  Every flow needs
     a TCP algorithm to be specified, from among the currently supported
     TCP algorithms.  At the moment, the only allowed specifiers are 
     \"FAST\", and \"Reno\".  See :class:`FAST` or :class:`Reno` for 
@@ -553,13 +564,13 @@ class Flow:
     :type host: :class:`Host`
     :param int dest: the address of the destination host
     :param int data: the total amount of data to transmit (bits)
-    :param int delay: the simulation time to wait before sending any packets
+    :param int delay: initial delay before sending any packets (ns)
     :param str tcp: TCP algorithm specifier
     :param list tcp_params: parameters for the TCP algorithm
     """
 
     allowed_tcp = {"FAST": FAST, "Reno": Reno}
-    """A dict mapping TCP specifiers to implementations (classes)."""
+    """A dict mapping TCP specifiers to :class:`TCP` subclasses."""
 
     def __init__(self, env, host, dest, data, delay, tcp, tcp_params):
         self._env = env
@@ -569,7 +580,7 @@ class Flow:
         self._dest = dest
         # Amount of data to transmit (bits)
         self._data = data
-        # Time (simulation time) to wait before initial transmission
+        # Time (ns) to wait before initial transmission
         self._delay = delay
         # Bits transmitted by flow
         self._transmitted = 0
@@ -731,15 +742,15 @@ class Flow:
 
         If a data size is given, return a generator which yields
         ceil(data size / packet size) packets.  If data size is None,
-        it yields a random, 8-bit number of packets.
+        it yields a random, 12-bit number of packets.
 
         :return: packet generator
         :rtype: generator
         """
         n = 0
         if self._data == None:
-            # Pick a random, 8-bit number of packets to send
-            n = random.getrandbits(8)
+            # Pick a random, 12-bit number of packets to send
+            n = random.getrandbits(12)
         else:
             # Calculate how many packets are needed to send self._data bits
             n = math.ceil(self._data / resources.Packet.size)
@@ -931,9 +942,9 @@ class Link:
     link resource, and the processes it may connect.
 
     :param simpy.Environment env: the simulation environment
-    :param int capacity: the link rate, in bits per second
-    :param int size: the link buffer size, in bits
-    :param int delay: the link delay in simulation time
+    :param int capacity: the link rate (bps)
+    :param int size: the link buffer size (bits)
+    :param int delay: the link delay in (ns)
     :param int lid: link id
     """
 
@@ -942,7 +953,7 @@ class Link:
         self._res = resources.LinkBuffer(env, size, lid)
         # Link capacity (bps)
         self._capacity = capacity
-        # Link delay (simulation time)
+        # Link delay (ns)
         self._delay = delay
 
         # Endpoints for each direction
@@ -1087,11 +1098,10 @@ class Link:
     def cost(self, direction):
         """Return the cost of a direction on this link.
 
-        Total cost is calculated as link delay divided by the logarithm
-        of link capacity divided by (data) packet size, plus the running
-        total of buffer occupancy.
+        Total cost is calculated as propagation delay / log(capacity /
+        data packet size) + cumulative buffer occupancy.
 
-        :param int direction: link direction (to compute cost for)
+        :param int direction: link direction
         :return: directional link cost
         :rtype: float
 

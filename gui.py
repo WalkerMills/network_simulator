@@ -144,7 +144,7 @@ class Dialog(tkinter.Toplevel):
 
 
 class InputDialog(Dialog):
-    """Dialog for entering field data.
+    """Base dialog box class for entering field data.
 
     :param parent: parent of this widget
     :type parent: tkinter.Widget
@@ -192,7 +192,7 @@ class InputDialog(Dialog):
 
 
 class FlowDialog(InputDialog):
-    """Dialog for specifying flow parameters.
+    """Dialog box for specifying flow parameters.
 
     The last entry in this dialog box is the TCP specification.  Since
     all TCP algorithms take a window size & timeout, they appear as
@@ -274,7 +274,7 @@ class FlowDialog(InputDialog):
 
 
 class LinkDialog(InputDialog):
-    """Dialog for specifying link parameters.
+    """Dialog box for specifying link parameters.
 
     :param parent: parent of this widget
     :type parent: tkinter.Widget
@@ -349,7 +349,7 @@ class NetworkInput(tkinter.Frame):
 
     @property
     def flows(self):
-        """The flows defined on this canvas
+        """The flows defined on this canvas.
 
         :return: a list of flows defined in this network
         :rtype: list

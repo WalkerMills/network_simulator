@@ -42,13 +42,17 @@ TWO = Case.two
 class Graph:
     """Graphing class for generating simulation results.
 
-    This class creates uses the :class:`Network` class to create and run
-    a simulation with the specified parameters, then groups the values
+    This class uses the :class:`Network` class to create and run a network
+    simulation with the specified parameters, then groups the values
     monitored during that simulation by category (window title), assuming
     that all monitored identifiers have the form \"window title,tags\",
     where tags may itself be a comma-delimited string of identifiers,
     such as an index, address, etc.  The instantiated object then provides
-    various methods to graph/save the data sets using matplotlib.
+    various methods to graph/save the data sets using matplotlib.  The
+    only obvious caveat when using the ``Graph`` class to run a simulation
+    is that monitored data must be restricted to numerical values (anything
+    that can be cast as a float) in order to actually produce graphical
+    output.
 
     :param adjacent: an adjacency list of the format taken by :class:`Network`
     :type adjacent: ([((str, str), (int, int, int))], 
@@ -107,7 +111,7 @@ class Graph:
         :param str title: graph title
         :param datasets: a list of tagged data sets given as (tags, x, y)
         :type datasets: [(tuple, ``numpy.ndarray``, ``numpy.ndarray``)]
-        :param str legend: individual data set title for the plot legend
+        :param str legend: legend label for each data set (e.g. \'flow\')
         :param str y_label: label for the plot\'s y axis
         :param float scale: y is multiplied by ``scale`` before graphing
         :param bool save: flag indicating whether to save or display figures
@@ -192,16 +196,16 @@ class Graph:
 class Network:
     """This class encapsulates a network simulation.
 
-    If network is None, then a GUI for drawing a network appears.  The
+    If ``adjacent`` is None, then a GUI for drawing a network appears.  The
     adjacency list should be formatted as [((src, dest), (capacity, buffer
     size, delay))], where src & dest are formatted as a string with a
     leading \"h\" or \"r\", specifying a host or router, followed by an
     integer id.  Flows should be given as [((src, dest), ((data, delay),
     (tcp, tcp_param)))], where src & dest are formatted as previously, but
     only host tags are allowed.  Link arguments are all in bits/bps, as
-    is the data parameter for flows.  Delay is given in simulation time.
-    The tcp parameter is a string which determines which TCP algorithm to
-    use; see :data:`process.Flow.allowed_tcp` for accepted TCP specifiers.
+    is the data parameter for flows.  Delay is given in ns. The tcp 
+    parameter is a string which determines which TCP algorithm to use;
+    see :data:`process.Flow.allowed_tcp` for accepted TCP specifiers.
     The tcp_param parameter is a list containing the arguments for
     initializing the TCP object, and will change depending on the TCP
     algorithm specified.  See :mod:`process` for details of the currently
@@ -317,7 +321,7 @@ class Network:
         :param until: time or event to run the simulation until
         :type until: int or ``simpy.events.Event``
         :return: all monitored values
-        :rtype: dict
+        :rtype: {str: [(int, object)]}
         """
         # Begin routing table initialization
         router_proc = \
