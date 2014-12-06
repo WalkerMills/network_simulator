@@ -63,6 +63,10 @@ class FAST(object):
         # Finish event
         self._finished = simpy.events.Event(self._flow.env)
 
+        self._flow.env.register(
+            "Queuing delay,{},{}".format(self._flow.host.addr, self._flow.id),
+            lambda: self._delay)
+
     @property
     def finished(self):
         """Transmission finished event.
@@ -113,9 +117,6 @@ class FAST(object):
 
         # Update estimated queuing delay
         self._delay = self._mean_trip - self._min_trip
-        self._flow.env.update(
-            "Queuing delay,{},{}".format(self._flow.host.addr, self._flow.id),
-            self._delay)
 
     def _update_dropped(self):
         """Append timed out packets to the dropped packet queue."""
@@ -157,23 +158,6 @@ class FAST(object):
         except simpy.events.Interrupt:
             pass
 
-    def _window_size(self):
-        """Calculate the transimssion window size.
-
-        Window size is equal to the difference in the ID's of the earliest
-        and latest packets sent, plus one.
-        """
-        # If there are no unacknowledged packets
-        if len(self._unacknowledged) == 0:
-            # The window is empty
-            return 0
-        # Sort the unacknowledged ID's
-        ids = sorted(packet.id for packet in self._unacknowledged.keys())
-        # Current window size = difference between the largest & smallest
-        # ID's + 1
-        return ids[-1] - ids[0] + 1
-        # return len(self._unacknowledged)
-
     def acknowledge(self, ack):
         """Process an acknowledgement packet.
 
@@ -191,7 +175,7 @@ class FAST(object):
         self._next.append(expected)
         # Get the unacknowledged packet
         packet = next(filter(lambda p: p.id == pid, 
-                      self._unacknowledged.keys()))
+                             self._unacknowledged.keys()))
         # Calculate round trip time
         rtt = self._flow.env.now - self._unacknowledged[packet]
         # Mark packet as acknowledged
@@ -231,7 +215,7 @@ class FAST(object):
             gen = self._gen
         try:
             # While the window is not full
-            while self._window_size() < int(self._window):
+            while len(self._unacknowledged) < int(self._window):
                 # Get the next data packet
                 packet = next(gen)
                 # Transmit the packet
@@ -353,6 +337,8 @@ class Reno(object):
         self._next = deque(maxlen=4)
         # Finish event
         self._finished = simpy.events.Event(self._flow.env)
+        # Waiting process for acknowledgements
+        self._wait_proc = None
 
     @property
     def finished(self):
@@ -390,13 +376,8 @@ class Reno(object):
             # Wait for acknowledgement(s)
             yield self._flow.env.timeout(self._timeout)
             logger.debug("timeout occurred".format(self._window))
-            # For each unacknowledged packet
-            for packet, time in list(self._unacknowledged.items())[:]:
-                # If it has timed out
-                if time <= self._flow.env.now - self._timeout:
-                    # Immediately retransmit the packet
-                    self.transmit(packet)
-
+            # Retransmit dropped packets
+            yield self._flow.env.process(self.burst(timeout=True))
             # Set the slow start threshold to half the window size
             self._ssthrsh = self._window / 2
             if self._ssthrsh == 0:
@@ -414,25 +395,8 @@ class Reno(object):
             self._slow_start = True
             self._fast_recovery = False
             self._CA = False
-
         except simpy.Interrupt:
             self._wait_proc = None
-
-    def _window_size(self):
-        """Calculate the transimssion window size.
-
-        Window size is equal to the difference in the ID's of the earliest
-        and latest packets sent, plus one.
-        """
-        # If there are no unacknowledged packets
-        if len(self._unacknowledged) == 0:
-            # The window is empty
-            return 0
-        # Sort the unacknowledged ID's
-        ids = sorted(packet.id for packet in self._unacknowledged.keys())
-        # Current window size = difference between the largest & smallest
-        # ID's + 1
-        return ids[-1] - ids[0] + 1
 
     def acknowledge(self, ack):
         """Process an acknowledgement packet.
@@ -455,7 +419,7 @@ class Reno(object):
         self._next.append(expected)
         # Get the unacknowledged packet
         packet = next(filter(lambda p: p.id == pid,
-                      self._unacknowledged.keys()))
+                             self._unacknowledged.keys()))
         
         # mark the packet as acknowledged
         del self._unacknowledged[packet]
@@ -472,7 +436,6 @@ class Reno(object):
             if self._window >= self._ssthrsh:
                 self._slow_start = False
                 self._CA = True
-
         # if in congestion avoidance phase
         elif self._CA == True:
             logger.debug("congestion avoidance {}".format(self._window))
@@ -490,7 +453,7 @@ class Reno(object):
                 self._fast_recovery = True
                 self._CA = False
                 dropped = next(filter(lambda p: p.id == expected,
-                           self._unacknowledged.keys()))
+                                      self._unacknowledged.keys()))
                 # immediately retransmit the dropped packet
                 yield self._flow.env.process(self.transmit(dropped))
                 # wait for timeout
@@ -505,6 +468,10 @@ class Reno(object):
                     self._window)
         # if in fast recovery phase
         elif self._fast_recovery == True:
+            self._flow.env.update(
+                "Window size,{},{}".format(self._flow.host.addr, 
+                                           self._flow.id),
+                self._window)
             logger.debug("fast recovery {}".format(self._window))
             # don't make any adjustments until there's a timeout, or
             # entire transmitted window is acknowledged
@@ -513,6 +480,34 @@ class Reno(object):
             if len(self._unacknowledged.items()) == 0:
                     self._fast_recovery = False
                     self._CA = True
+
+    def burst(self, timeout=False):
+        if timeout:
+            late = [p for p, t in self._unacknowledged.items() 
+                    if t <= self._flow.env.now - self._timeout]
+            gen = (p for p in late)
+        else:
+            gen = self._gen
+        try:
+            # While we have room in the window
+            while timeout or len(self._unacknowledged) < int(self._window):
+                # Get the next data packet
+                packet = next(gen)
+                # Transmit the data packet
+                yield self._flow.env.process(self.transmit(packet))
+            # Wait for acknowledgements, or timeout
+            self._wait_proc = self._flow.env.process(self._wait())
+            yield self._wait_proc
+        except StopIteration:
+            if not timeout:
+                while self._unacknowledged:
+                    # Wait for packets in the last window
+                    self._wait_proc = self._flow.env.process(self._wait())
+                    yield self._wait_proc
+                self._gen = None
+                # Mark this TCP algorithm as finished, if it isn't already
+                if not self._finished.triggered:
+                    self._finished.succeed()
 
     def get_departure(self, pid):
         """Returns the departure time of a packet with given pid.
@@ -535,30 +530,8 @@ class Reno(object):
 
         :return: None
         """
-        try:
-            while True:
-                # While we have room in the window
-                while self._window_size() < self._window:
-                    # Get the next data packet
-                    packet = next(self._gen)
-                    # Transmit the data packet
-                    yield self._flow.env.process(self.transmit(packet))
-                # Wait for acknowledgements, or timeout
-                self._wait_proc = self._flow.env.process(self._wait())
-                yield self._wait_proc
-        except StopIteration:
-            # Wait for packets in the last window
-            self._wait_proc = self._flow.env.process(self._wait())
-            yield self._wait_proc
-            # If there remain unacknowledged packets
-            if len(self._unacknowledged) > 0:
-                # Make a generator for the dropped packets
-                self._gen = (p for p in list(self._unacknowledged.keys())[:])
-                # Resend all dropped packets
-                yield self._flow.env.process(self.send())
-            # Mark this TCP algorithm as finished, if it isn't already
-            if not self._finished.triggered:
-                self._finished.succeed()
+        while True and not self._finished.triggered:
+            yield self._flow.env.process(self.burst())
 
     def transmit(self, packet):
         """Transmit a data packet to the host flow.
@@ -1009,8 +982,7 @@ class Link(object):
                     packet.size * 1e9 / self._capacity)
                 self.res.env.process(self._transmit(direction, packet))
             else:
-                yield self.res.env.timeout(
-                    resources.Packet.size * 1e9 / self._capacity)
+                yield self.res.env.timeout(1000000)
 
     def _reset(self, attr):
         """Get the value of the specified attribute, and reset it to 0."""
@@ -1033,14 +1005,14 @@ class Link(object):
             "link {} transmitting packet {}, {}, {} at time {}".format(
                 self.res.id, packet.src, packet.flow, packet.id, 
                 self.res.env.now))
-        # Update total bits transmitted by link
-        self._transmitted += packet.size
         # update average of buffer fill
         self.res.update_buffered(direction, self.res.env.now)
         # Transmit packet after waiting, as if sending the packet
         # across a physical link
         yield simpy.util.start_delayed(self.res.env,
             self._endpoints[direction].receive(packet), self._delay)
+        # Update total bits transmitted by link
+        self._transmitted += packet.size
 
     def connect(self, A, B):
         """Connect two network components via this link.
@@ -1218,9 +1190,8 @@ class Router(object):
                 logger.debug("router {} self converged".format(self._addr))
                 # and send Finish packets to neighboring routers
                 # not connected to hosts
-                for t in filter(
-                    lambda t: Host not in map(type, t.link.endpoints),
-                    self._links):
+                for t in [T for T in self._links 
+                          if Host not in map(type, T.link.endpoints)]:
                     #create reference to outbound port for this router 
                     #on the router recieving the packet
                     transport_ref = t.reverse()
@@ -1266,9 +1237,8 @@ class Router(object):
                         self._update_table[new_host.addr] = (transport, 
                                                              transport.cost)
                         # get list of transport handlers not connected to hosts
-                        for t in filter(
-                            lambda t: Host not in map(type, t.link.endpoints), 
-                            self._links):
+                        for t in [T for T in self._links 
+                                  if Host not in map(type, T.link.endpoints)]:
                             packet = resources.Routing(
                                 (new_host.addr, transport.cost + t.cost, 
                                  [self._addr], t.reverse()))
@@ -1331,8 +1301,6 @@ class Router(object):
             transport = self.route(packet.dest)
             # tranmit packet
             yield self.res.env.process(self.transmit(packet, transport))
-            # Wait before sending another packet
-            #yield self.res.env.timeout(packet.size * 1e9 / transport.capacity)
 
     def transmit(self, packet, transport):
         """Transmit an outbound packet.        

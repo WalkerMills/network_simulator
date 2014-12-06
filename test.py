@@ -71,10 +71,10 @@ class TestCase(object):
 
     tcp_parameters = {
         Case.zero: {'FAST': [[1, 50000000, 32]], 'Reno': [[1, 50000000]]}, 
-        Case.one: {'FAST': [[1, 120000000, 20]], 'Reno': [[1, 100000000]]},
-        Case.two: {'FAST': [[1, 150000000, 20], 
-                            [1, 80000000, 20],
-                            [1, 80000000, 20]],
+        Case.one: {'FAST': [[1, 120000000, 20]], 'Reno': [[1, 120000000]]},
+        Case.two: {'FAST': [[1, 150000000, 6], 
+                            [1, 80000000, 6],
+                            [1, 80000000, 6]],
                    'Reno': [[1, 150000000], 
                             [1, 80000000],
                             [1, 80000000]]}
@@ -127,10 +127,7 @@ class Graph(object):
                   "Queuing delay": ["flow", "ms", 1e-6]}
     """Maps graph title to :meth:`graph` parameters."""
 
-    def __init__(self, adjacent, tcp="FAST", until=None, graph=True, 
-                 tags=None):
-        # Store graphing flag
-        self._graph = graph
+    def __init__(self, adjacent, tcp="FAST", until=None):
         # Data sets grouped by window title (data category)
         self._data = dict()
         # Create a network simulation with the given parameters
@@ -161,7 +158,7 @@ class Graph(object):
         """
         return list(self._data.keys())
 
-    def graph(self, title, datasets, legend, y_label, scale=1.0):
+    def graph(self, title, datasets, legend, y_label, scale=1.0, save=False):
         """Graph a set of data sets.
 
         :param str title: graph title
@@ -170,6 +167,7 @@ class Graph(object):
         :param str legend: individual data set title for the plot legend
         :param str y_label: label for the plot\'s y axis
         :param float scale: y is multiplied by ``scale`` before graphing
+        :param bool save: flag indicating whether to save or display figures
         """
         # Get a new figure
         fig = plt.figure()
@@ -181,13 +179,13 @@ class Graph(object):
         plt.ylabel(y_label)
         # For each tagged dataset
         for tags, x, y in datasets:
-            y *= scale
+            y = y * scale
             # Plot the data set, and make a legend entry for it
             plt.plot(x, y, label="{} {}".format(legend, ','.join(tags)))
         # Create the plot legend
         plt.legend()
         # If the graphing flag is set
-        if self._graph:
+        if not save:
             # Graph the data
             plt.show()
         else:
@@ -196,7 +194,7 @@ class Graph(object):
         # Close all figures
         plt.close('all')
 
-    def graph_all(self, tags=None):
+    def graph_all(self, tags=None, save=False):
         """Graph all data sets.
 
         If the ``tags`` parameter is given, graphical output for data
@@ -204,11 +202,12 @@ class Graph(object):
         sets with the specified tags.
 
         :param dict tags: dictionary mapping titles to data set tags
+        :param bool save: flag indicating whether to save or display figures
         :return: None
         """
-        self.graph_titles(self._data.keys(), tags)
+        self.graph_titles(self._data.keys(), tags, save)
 
-    def graph_titles(self, titles, tags=None):
+    def graph_titles(self, titles, tags=None, save=False):
         """Graph sets of data sets by category title.
 
         If the ``tags`` parameter is given, graphical output for data
@@ -217,6 +216,7 @@ class Graph(object):
 
         :param list titles: titles of data categories to graph
         :param dict tags: dictionary mapping titles to data set tags
+        :param bool save: flag indicating whether to save or display figures
         :return: None
         """
         # For each title
@@ -243,4 +243,4 @@ class Graph(object):
                 # If none were found, make empty legend & y axis labels
                 args = [str(), str()]
             # Graph the data sets
-            self.graph(title, datasets, *args)
+            self.graph(title, datasets, *args, save=save)
