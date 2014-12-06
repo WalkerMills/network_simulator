@@ -70,14 +70,14 @@ class TestCase(object):
     """Edge & flow adjacency lists for each test case."""
 
     tcp_parameters = {
-        Case.zero: {'FAST': [[1, 50000000, 32]], 'Reno': [[1, 50000000]]}, 
-        Case.one: {'FAST': [[1, 120000000, 20]], 'Reno': [[1, 120000000]]},
+        Case.zero: {'FAST': [[1, 30000000, 32]], 'Reno': [[1, 40000000]]}, 
+        Case.one: {'FAST': [[1, 120000000, 20]], 'Reno': [[1, 160000000]]},
         Case.two: {'FAST': [[1, 150000000, 6], 
-                            [1, 80000000, 6],
-                            [1, 80000000, 6]],
-                   'Reno': [[1, 150000000], 
-                            [1, 80000000],
-                            [1, 80000000]]}
+                            [1, 90000000, 6],
+                            [1, 90000000, 6]],
+                   'Reno': [[1, 2000000000], 
+                            [1, 120000000],
+                            [1, 120000000]]}
     }
     """TCP parameters for each test case."""
 

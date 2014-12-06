@@ -375,7 +375,7 @@ class Reno(object):
         try:
             # Wait for acknowledgement(s)
             yield self._flow.env.timeout(self._timeout)
-            logger.debug("timeout occurred".format(self._window))
+            logger.info("timeout occurred".format(self._window))
             # Retransmit dropped packets
             yield self._flow.env.process(self.burst(timeout=True))
             # Set the slow start threshold to half the window size
@@ -388,9 +388,6 @@ class Reno(object):
                 "Window size,{},{}".format(self._flow.host.addr, 
                                            self._flow.id),
                 self._window)
-            # Double timeout length
-            #if self._timeout < self._max_time:
-            #    self._timeout *= 2
             #revert to slow start on timeout
             self._slow_start = True
             self._fast_recovery = False
@@ -420,7 +417,10 @@ class Reno(object):
         # Get the unacknowledged packet
         packet = next(filter(lambda p: p.id == pid,
                              self._unacknowledged.keys()))
-        
+        rtt = self._flow.env.now - self._unacknowledged[packet]
+        if self._timeout < 2 * rtt:
+            self._timeout = 2 * rtt
+
         # mark the packet as acknowledged
         del self._unacknowledged[packet]
 
@@ -495,6 +495,7 @@ class Reno(object):
                 packet = next(gen)
                 # Transmit the data packet
                 yield self._flow.env.process(self.transmit(packet))
+            # if not timeout:
             # Wait for acknowledgements, or timeout
             self._wait_proc = self._flow.env.process(self._wait())
             yield self._wait_proc
