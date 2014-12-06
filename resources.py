@@ -10,7 +10,7 @@ import queue
 import simpy
 import simpy.util
 
-from collections import deque, OrderedDict
+from collections import deque
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -45,9 +45,13 @@ class MonitoredEnvironment(simpy.core.Environment):
     def _update_proc(self, name, getter, avg, nonzero, step):
         """Process for periodically updating an identifier."""
         while True:
+            # Call the getter, and average its value if the avg flag is set
             value = getter() / step**avg
+            # If the nonzero flag isn't set or it is & we got a nonzero value
             if not nonzero or (nonzero and value != 0):
+                # Record a timestamped
                 self.update(name, value)
+            # Wait for the next update
             yield self.timeout(step)
 
     def monitored(self):
@@ -85,8 +89,11 @@ class MonitoredEnvironment(simpy.core.Environment):
         """
         if name in self._monitored.keys():
             raise ValueError('duplicate identifier \'{}\''.format(name))
+        # If no step was given
         if step is None:
+            # Use the default step
             step = self._step
+        # Start the update process for this value
         self._getters[name] = self.process(
             self._update_proc(name, getter, avg, nonzero, step))
 
@@ -100,8 +107,10 @@ class MonitoredEnvironment(simpy.core.Environment):
         :return: None
         """
         try:
+            # Record the timestamped value for this identifier
             self._monitored[name].append((self.now, value))
         except KeyError:
+            # Create a new entry if none exists
             self._monitored[name] = [(self.now, value)]
 
 
@@ -189,8 +198,6 @@ class Packet:
 
     def acknowledge(self, expected):
         """Generate an acknowledgement for this packet.
-        Packets return an id based on the next packet id expected 
-        by the host.
 
         :param int expected: the next packet id expected (ACK payload)
         :return: an acknowledgement packet matching this packet
@@ -276,24 +283,18 @@ class LinkEnqueue(simpy.events.Event):
     def __init__(self, buffer_, direction, packet):
         # Initialize event
         super(LinkEnqueue, self).__init__(buffer_.env)
-        # Set queuing direction
-        self._direction = direction
-
         # Enqueue the packet for transmission, if the buffer isn't full
         if packet.size <= buffer_._available(direction):
-            # logger.debug("enqueuing packet {}, {}, {} at time {}".format(
-            #     self._packet.src, self._packet.flow, self._packet.id, 
-            #     self._buffer.env.now))
+            logger.debug("enqueuing packet {}, {}, {} at time {}".format(
+                packet.src, packet.flow, packet.id, buffer_.env.now))
             # Increment buffer fill
             buffer_._update_fill(direction, packet.size)
             # Enqueue packet
             buffer_._queues[direction].append(packet)
-            # Add this packet to the dict of recent packets
-            buffer_._add_recent(direction, packet)
             # Set dropped flag to False
             dropped = False
         else:
-            logger.info(
+            logger.debug(
                 "link {} dropped packet {}, {}, {} at time {}\t{}".format(
                     buffer_.id, packet.src, packet.flow, packet.id, 
                     buffer_.env.now, len(buffer_._queues[direction])))
@@ -314,15 +315,6 @@ class LinkEnqueue(simpy.events.Event):
 
     cancel = __exit__
 
-    @property
-    def direction(self):
-        """Link direction for this transmission event.
-
-        :return: link direction
-        :rtype: int
-        """
-        return self._direction
-
 
 class LinkBuffer:
     """SimPy resource representing a link's buffers.
@@ -330,16 +322,13 @@ class LinkBuffer:
     This class is a full-duplex link implemented as a resource.  Packet
     transmission is parametrized by direction, and each link has two
     allowed directions (0 or 1), each of which has a dedicated buffer.
-    New packets are added to the appropriate buffer, and trigger a buffer
-    flush, which sends as much data from the buffer as possible through
-    the link in the specified direction.
+    New packets are added to the appropriate buffer, to be dequeued
+    by the :class:`process.Link` that owns the resource instance.
 
     :param simpy.Environment env: the simulation environment
     :param int size: link buffer size, in bits
     :param int lid: link id
     """
-
-    # TODO: update docstring
 
     def __init__(self, env, size, lid):
         self.env = env
@@ -350,20 +339,13 @@ class LinkBuffer:
 
         # Buffers for each edge direction
         self._queues = (deque(), deque())
-        # Length of time for calculating average arrival rate & queuing delay
-        self._time = 500000000 # .5 sec
-        # Recently received packets
-        self._recent = (OrderedDict(), OrderedDict())
         # Buffer fill (bits)
         self._fill = [0.0, 0.0]
         # Number of dropped packets
         self._dropped = 0
-
-        # running total for buffer occupancy
-        self._occupancy = 0
-        self._avg_fill = 0
-        self._last_update = 0
-
+        # Running total of buffer occupancy
+        self._occupancy = [0, 0]
+        # Monitor buffer fill periodically
         self.env.register("Link fill,{}".format(self.id), 
                           lambda: sum(len(q) for q in self._queues))
         # Bind event constructors as methods
@@ -395,28 +377,6 @@ class LinkBuffer:
         """
         return self._size
 
-    def _add_recent(self, direction, packet):
-        """Add a packet to the dictionary of recent packets.
-
-        If a packet is received which invalidates earlier data, remove
-        that data.
-
-        :param int direction: link direction
-        :param packet: the packet to add
-        :type packet: :class:`Packet`
-        :return: None
-        """
-        if not isinstance(packet, Routing):
-            self._recent[direction][packet] = [self.env.now, None]
-        invalid = list()
-        for p, times in self._recent[direction].items():
-            if times[0] + self._time < self.env.now:
-                invalid.append(p)
-            else:
-                break
-        for p in invalid:
-            del self._recent[direction][p]
-
     def _available(self, direction):
         """The available buffer capacity in the given direction.
 
@@ -445,13 +405,13 @@ class LinkBuffer:
         # Update fill
         self._fill[direction] += delta
 
-    def buffered(self):
+    def buffered(self, direction):
         """Total number of packets in link buffers.
 
         :return: total buffer occupancy
         :rtype: int
         """
-        return self._occupancy
+        return self._occupancy[direction]
 
     def dequeue(self, direction):
         """Dequeue a packet from the specified buffer.
@@ -486,13 +446,7 @@ class LinkBuffer:
         :param int time: time of the update
         :return: None
         """
-        diff = self._last_update - time
-        if diff >= self._time:
-            self._avg_fill = self._occupancy / diff
-            self._occupancy = 0
-            logger.warning('resetting buffer occupancy')
-        else:
-            self._occupancy += len(self._queues[direction])
+        self._occupancy[direction] += len(self._queues[direction])
 
 
 class ReceivePacket(simpy.events.Event):
