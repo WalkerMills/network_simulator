@@ -21,6 +21,44 @@ DOWN = 0
 UP = 1
 """Upload diretion."""
 
+def reset(klass):
+    """Class decorator for adding a reset method.
+
+    The reset method takes an object, the name of an attribute, and
+    optionally an index, retrieves the value of the attribute (at the
+    index, if given), resets the value using its type constructor, and
+    returns the original value.  This class decorator is primarily for
+    use with :func:`MonitoredEnvironment.register`; decorated classes 
+    may use the reset method to generically create a getter for a time-
+    averaged value, since it both fetches and resets the value, as long
+    as that value is stored in a class attribute.
+
+    :param class klass: class to decorate
+    :return: the decorated class
+    :rtype: class
+    """
+
+    def _reset(obj, attr, index=None):
+        """Get the value of the specified attribute, and reset it."""
+        if index is not None:
+            # Get the value of the attribute
+            val = getattr(obj, attr)
+            # Extract the return value
+            ret = val[index]
+            # Reset the replacement value at the index
+            val[index] = type(ret)()
+        else:
+            # Get the return value
+            ret = getattr(obj, attr)
+            # Reset the replacement value
+            val = type(ret)()
+        # Replace the value of the attribute
+        setattr(obj, attr, val)
+        # Return the original value
+        return ret
+
+    return type(klass.__name__, (klass,), {"reset": _reset})
+
 
 class MonitoredEnvironment(simpy.core.Environment):
     """SimPy environment with monitoring.
@@ -42,18 +80,7 @@ class MonitoredEnvironment(simpy.core.Environment):
         self._getters = dict()
         self._step = step
 
-    def _update_proc(self, name, getter, avg, nonzero, step):
-        """Process for periodically updating an identifier."""
-        while True:
-            # Call the getter, and average its value if the avg flag is set
-            value = getter() / step**avg
-            # If the nonzero flag isn't set or it is & we got a nonzero value
-            if not nonzero or (nonzero and value != 0):
-                # Record a timestamped
-                self.update(name, value)
-            # Wait for the next update
-            yield self.timeout(step)
-
+    @property
     def monitored(self):
         """The timestamped values of all monitored attributes.
 
@@ -62,28 +89,28 @@ class MonitoredEnvironment(simpy.core.Environment):
         """
         return self._monitored
 
-    def values(self, name):
-        """The values for the given identifier.
+    def _update_proc(self, name, getter, avg, step):
+        """Process for periodically updating an identifier."""
+        while True:
+            # Call the getter, and average its value if the avg flag is set
+            value = getter() / step**avg
+            # Record a timestamped value
+            self.update(name, value)
+            # Wait for the next update
+            yield self.timeout(step)
 
-        :param str name: the identifier to retrieve values for
-        :return: timestamped values list
-        :rtype: [(int, object)]
-        """
-        return self._monitored[name]
-
-    def register(self, name, getter, avg=False, nonzero=False, step=None):
+    def register(self, name, getter, avg=False, step=None):
         """Register a new identifier.
 
         If the avg flag is set, the return value of the getter is divided
         by the time step over which the update is performed, in order to
-        yield an average.  If the nonzero flag is set, only nonzero values
-        are recorded.  The environment is initialized with a default step,
-        but the ``step`` parameter may override it for the given identifier.
+        yield an average.  The environment is initialized with a default
+        step, but the ``step`` parameter may override it for the given
+        identifier.
 
         :param str name: identifier
         :param function getter: getter function
         :param bool avg: flag indicating whether to average the getter value
-        :param bool nonzero: flag indicating whether data is nonzero
         :param int step: update period for this identifier
         :return: None
         """
@@ -95,7 +122,7 @@ class MonitoredEnvironment(simpy.core.Environment):
             step = self._step
         # Start the update process for this value
         self._getters[name] = self.process(
-            self._update_proc(name, getter, avg, nonzero, step))
+            self._update_proc(name, getter, avg, step))
 
     def update(self, name, value):
         """Add a value for the specified identifier.
@@ -112,6 +139,15 @@ class MonitoredEnvironment(simpy.core.Environment):
         except KeyError:
             # Create a new entry if none exists
             self._monitored[name] = [(self.now, value)]
+
+    def values(self, name):
+        """The values for the given identifier.
+
+        :param str name: the identifier to retrieve values for
+        :return: timestamped values list
+        :rtype: [(int, object)]
+        """
+        return self._monitored[name]
 
 
 class Packet:

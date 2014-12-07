@@ -338,7 +338,7 @@ class Network:
         logger.info("all flows have terminated at time {}".format(
             self.env.now))
         # Retrieve monitored values
-        values = self.env.monitored()
+        values = self.env.monitored
         # Reset the environment
         self.env = resources.MonitoredEnvironment()
         # Return the monitored values

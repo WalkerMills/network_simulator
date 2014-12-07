@@ -548,6 +548,7 @@ class Reno(TCP):
             yield self.flow.env.process(self.burst())
 
 
+@resources.reset
 class Flow:
     """SimPy process representing a flow.
 
@@ -605,10 +606,10 @@ class Flow:
             self._avg_rtt)
         self.env.register(
             "Flow received,{},{}".format(self._host.addr, self._id),
-            lambda: self._reset("_received"), True, True)
+            lambda: self.reset("_received"), True)
         self.env.register(
             "Flow transmitted,{},{}".format(self._host.addr, self._id),
-            lambda: self._reset("_transmitted"), True, True)
+            lambda: self.reset("_transmitted"), True)
 
     @property
     def dest(self):
@@ -676,25 +677,6 @@ class Flow:
         except ZeroDivisionError:
             avg = self._mean_rtt
         return avg
-
-    def _reset(self, attr, index=None):
-        """Get the value of the specified attribute, and reset it."""
-        if index is not None:
-            # Get the value of the attribute
-            val = getattr(self, attr)
-            # Extract the return value
-            ret = val[index]
-            # Reset the replacement value at the index
-            val[index] = type(ret)()
-        else:
-            # Get the return value
-            ret = getattr(self, attr)
-            # Reset the replacement value
-            val = type(ret)()
-        # Replace the value of the attribute
-        setattr(self, attr, val)
-        # Return the original value
-        return ret
 
     def _update_rtt(self, pid):
         """Update list of packet RTT's."""
@@ -777,6 +759,7 @@ class Flow:
             packet.size * 1e9 / self._host.transport.capacity)
 
 
+@resources.reset
 class Host:
     """SimPy process representing a host.
 
@@ -803,9 +786,9 @@ class Host:
         self._received = 0
 
         self.env.register("Host received,{}".format(self._addr),
-                          lambda: self._reset("_received"), True, True)
+                          lambda: self.reset("_received"), True)
         self.env.register("Host transmitted,{}".format(self._addr),
-                          lambda: self._reset("_transmitted"), True, True)
+                          lambda: self.reset("_transmitted"), True)
 
     @property
     def addr(self):
@@ -842,12 +825,6 @@ class Host:
         :rtype: :class:`Transport` or None
         """
         return self._transport
-
-    def _reset(self, attr):
-        """Get the value of the specified attribute, and reset it to 0."""
-        ret = getattr(self, attr)
-        setattr(self, attr, 0)
-        return ret
 
     def connect(self, transport):
         """Connect a new (link) transport handler to this host.
@@ -934,6 +911,7 @@ class Host:
                 self._flows[packet.flow].acknowledge(packet))
 
 
+@resources.reset
 class Link:
     """SimPy process representing a link.
 
@@ -972,10 +950,10 @@ class Link:
 
         self.env.register(
             "Link transmitted,{},{}".format(self._res.id, resources.DOWN),
-            lambda: self._reset("_transmitted", resources.DOWN), True)
+            lambda: self.reset("_transmitted", resources.DOWN), True)
         self.env.register(
             "Link transmitted,{},{}".format(self._res.id, resources.UP),
-            lambda: self._reset("_transmitted", resources.UP), True)
+            lambda: self.reset("_transmitted", resources.UP), True)
 
     @property
     def capacity(self):
@@ -1037,25 +1015,6 @@ class Link:
             else:
                 # Otherwise, wait 1 ms and try again
                 yield self.env.timeout(self._flush_wait)
-
-    def _reset(self, attr, index=None):
-        """Get the value of the specified attribute, and reset."""
-        if index is not None:
-            # Get the value of the attribute
-            val = getattr(self, attr)
-            # Extract the return value
-            ret = val[index]
-            # Reset the replacement value at the index
-            val[index] = type(ret)()
-        else:
-            # Get the return value
-            ret = getattr(self, attr)
-            # Reset the replacement value
-            val = type(ret)()
-        # Replace the value of the attribute
-        setattr(self, attr, val)
-        # Return the original value
-        return ret
 
     def _transmit(self, direction, packet):
         """Transmit a packet across the link in a given direction.
