@@ -601,7 +601,7 @@ class Flow:
             "Round trip times,{},{}".format(self._host.addr, self._id),
             self._avg_rtt)
         self.env.register(
-            "Flow transmitted,{},{}".format(self._host.addr, self._id),
+            "Flow rate,{},{}".format(self._host.addr, self._id),
             lambda: self.reset("_transmitted"), True)
 
     @property
@@ -778,7 +778,7 @@ class Host:
         # Bits received by host
         self._received = 0
 
-        self.env.register("Host transmitted,{}".format(self._addr),
+        self.env.register("Host rate,{}".format(self._addr),
                           lambda: self.reset("_transmitted"), True)
 
     @property
@@ -940,10 +940,10 @@ class Link:
         self._flush_wait = 1000000 # 1 ms
 
         self.env.register(
-            "Link transmitted,{},{}".format(self._res.id, resources.DOWN),
+            "Link rate,{},{}".format(self._res.id, resources.DOWN),
             lambda: self.reset("_transmitted", resources.DOWN), True)
         self.env.register(
-            "Link transmitted,{},{}".format(self._res.id, resources.UP),
+            "Link rate,{},{}".format(self._res.id, resources.UP),
             lambda: self.reset("_transmitted", resources.UP), True)
 
     @property

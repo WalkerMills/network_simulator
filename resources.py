@@ -373,8 +373,10 @@ class LinkBuffer:
         # Running total of buffer occupancy
         self._occupancy = [0, 0]
         # Monitor buffer fill periodically
-        self.env.register("Link fill,{}".format(self.id), 
-                          lambda: sum(len(q) for q in self._queues))
+        self.env.register("Link fill,{},{}".format(self.id, DOWN), 
+                          lambda: len(self._queues[DOWN]))
+        self.env.register("Link fill,{},{}".format(self.id, UP), 
+                          lambda: len(self._queues[UP]))
         # Bind event constructors as methods
         simpy.core.BoundClass.bind_early(self)
 

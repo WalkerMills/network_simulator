@@ -16,18 +16,33 @@ if __name__ == "__main__":
                     "network (the TCP flag will be ignored).")
     case = parser.add_mutually_exclusive_group()
     tcp = parser.add_mutually_exclusive_group()
-    case.add_argument("-0", "--zero", dest="zero", action="store_const",
-                      const=0, default=-1, help="Test case 0")
-    case.add_argument("-1", "--one", dest="one", action="store_const",
-                      const=1, default=-1, help="Test case 1")
-    case.add_argument("-2", "--two", dest="two", action="store_const",
-                      const=2, default=-1, help="Test case 2")
-    tcp.add_argument("-f", "--fast", dest="fast", action="store_true",
-                     default=True, help="FAST TCP (default)")
-    tcp.add_argument("-r", "--reno", dest="reno", action="store_true",
-                     default=False, help="TCP Reno")
-    parser.add_argument("-s", "--save", dest="save", action="store_true",
-                        default=False, help="Save graphs (default is display)")
+    case.add_argument(
+        "-0", "--zero", dest="zero", action="store_const", const=0, default=-1,
+        help="Test case 0")
+    case.add_argument(
+        "-1", "--one", dest="one", action="store_const", const=1, default=-1,
+        help="Test case 1")
+    case.add_argument(
+        "-2", "--two", dest="two", action="store_const", const=2, default=-1,
+        help="Test case 2")
+    tcp.add_argument(
+        "-F", "--FAST", dest="fast", action="store_true", default=True,
+        help="FAST TCP (default)")
+    tcp.add_argument(
+        "-R", "--Reno", dest="reno", action="store_true", default=False,
+        help="TCP Reno")
+    parser.add_argument(
+        "-s", "--save", dest="save", action="store_true", default=False,
+        help="Save graphs (default is display)")
+    parser.add_argument(
+        "-f", "--flows", dest="flows", type=str, nargs="+", default=list(),
+        help="Flow id's to display output for, given as \"host id,flow id\"")
+    parser.add_argument(
+        "-H", "--hosts", dest="hosts", type=int, nargs="+", default=list(),
+        help="Host id's to display output for")
+    parser.add_argument(
+        "-l", "--links", dest="links", type=int, nargs="+", default=list(),
+        help="Link id's to display output for")
     # Parse all command line options
     parsed = parser.parse_args()
     try:
@@ -42,7 +57,24 @@ if __name__ == "__main__":
     except StopIteration:
         # Draw the GUI
         adj = gui.draw()
+    # Parse the inputted tags into the form expected by test.Graph methods,
+    # and map legend labels to tags
+    input_tags = {"host": [(h,) for h in parsed.hosts],
+                  "link": sum(([(l, 0), (l, 1)] for l in parsed.links), [])}
+    if parsed.flows:
+        input_tags["flow"] = [tuple(int(t) for t in parsed.flows)]
+    else:
+        input_tags["flow"] = parsed.flows
+    # Assign host, flow, and link tags to data sets by legend label
+    filter_tags = dict()
+    for title, kwargs in test.Graph.title_kwargs.items():
+        try:
+            # Skip empty tags, or legend labels w/o matching tags
+            if input_tags[kwargs["legend"]]:
+                filter_tags[title] = input_tags[kwargs["legend"]]
+        except KeyError:
+            continue
     # Initialize the graphing object (run the simulation)
     g = test.Graph(adj)
     # Display/save the output
-    g.graph_all(save=parsed.save)
+    g.graph_all(tags=filter_tags, save=parsed.save)

@@ -46,7 +46,7 @@ class Graph:
     simulation with the specified parameters, then groups the values
     monitored during that simulation by category (window title), assuming
     that all monitored identifiers have the form \"window title,tags\",
-    where tags may itself be a comma-delimited string of identifiers,
+    where tags may itself be a comma-delimited string of integer values,
     such as an index, address, etc.  The instantiated object then provides
     various methods to graph/save the data sets using matplotlib.  The
     only obvious caveat when using the ``Graph`` class to run a simulation
@@ -62,17 +62,16 @@ class Graph:
     :type until: int or ``simpy.events.Event``
     """
 
-    title_args = {"Flow received": ["flow", "Mbps", 1000],
-                  "Flow transmitted": ["flow", "Mbps", 1000],
-                  "Round trip times": ["flow", "ms", 1e-6],
-                  "Host transmitted": ["host", "Mbps", 1000],
-                  "Host received": ["host", "Mbps", 1000],
-                  "Link fill": ["link", "packets"],
-                  "Dropped packets": ["link", "packets"],
-                  "Link transmitted": ["link", "Mbps", 1000],
-                  "Window size": ["flow", "packets"],
-                  "Queuing delay": ["flow", "ms", 1e-6]}
-    """Maps graph title to :meth:`graph` parameters."""
+    title_kwargs = {
+        "Flow rate": {"legend": "flow", "y_label": "Mbps", "scale": 1000},
+        "Round trip times": {"legend": "flow", "y_label": "ms", "scale": 1e-6},
+        "Host rate": {"legend": "host", "y_label": "Mbps", "scale": 1000},
+        "Link fill": {"legend": "link", "y_label": "packets"},
+        "Dropped packets": {"legend": "link", "y_label": "packets"},
+        "Link rate": {"legend": "link", "y_label": "Mbps", "scale": 1000},
+        "Window size": {"legend": "flow", "y_label": "packets"},
+        "Queuing delay": {"legend": "flow", "y_label": "ms", "scale": 1e-6}}
+    """Maps graph title to :meth:`graph` keyword parameters."""
 
     def __init__(self, adjacent, tcp="FAST", until=None):
         # Data sets grouped by window title (data category)
@@ -85,6 +84,8 @@ class Graph:
         for key, raw in monitored.items():
             # Extract the monitored title & identifying tags
             title, *tags = key.split(",")
+            # Cast the tags as integers, and make them immutable
+            tags = tuple(int(t) for t in tags)
             # If this is the first value of this category processed
             if title not in self._data.keys():
                 # Create a new entry for its category
@@ -94,7 +95,7 @@ class Graph:
             # Scale time from nanoseconds to milliseconds
             time /= 1e6
             # Append the tagged data set to the data for this category
-            self._data[title].append((tuple(tags), time, value))
+            self._data[title].append((tags, time, value))
 
     @property
     def titles(self):
@@ -105,7 +106,8 @@ class Graph:
         """
         return list(self._data.keys())
 
-    def graph(self, title, datasets, legend, y_label, scale=1.0, save=False):
+    def graph(self, title, datasets, legend=str(), y_label=str(), 
+              scale=1.0, save=False):
         """Graph a set of data sets.
 
         :param str title: graph title
@@ -128,7 +130,8 @@ class Graph:
         for tags, x, y in datasets:
             y = y * scale
             # Plot the data set, and make a legend entry for it
-            plt.plot(x, y, label="{} {}".format(legend, ",".join(tags)))
+            plt.plot(x, y, 
+                label="{} {}".format(legend, ", ".join(str(t) for t in tags)))
         # Create the plot legend
         plt.legend()
         # If the graphing flag is set
@@ -185,12 +188,13 @@ class Graph:
                 continue
             try:
                 # Get the graphing parameters for this data category
-                args = self.title_args[title]
+                args = self.title_kwargs[title]
             except KeyError:
                 # If none were found, make empty legend & y axis labels
-                args = [str(), str()]
+                args = dict()
+            args["save"] = save
             # Graph the data sets
-            self.graph(title, datasets, *args, save=save)
+            self.graph(title, datasets, **args)
 
 
 class Network:
