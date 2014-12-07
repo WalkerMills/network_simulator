@@ -144,7 +144,7 @@ class Dialog(tkinter.Toplevel):
 
 
 class InputDialog(Dialog):
-    """Dialog for entering field data.
+    """Base dialog box class for entering field data.
 
     :param parent: parent of this widget
     :type parent: tkinter.Widget
@@ -192,7 +192,7 @@ class InputDialog(Dialog):
 
 
 class FlowDialog(InputDialog):
-    """Dialog for specifying flow parameters.
+    """Dialog box for specifying flow parameters.
 
     The last entry in this dialog box is the TCP specification.  Since
     all TCP algorithms take a window size & timeout, they appear as
@@ -274,7 +274,7 @@ class FlowDialog(InputDialog):
 
 
 class LinkDialog(InputDialog):
-    """Dialog for specifying link parameters.
+    """Dialog box for specifying link parameters.
 
     :param parent: parent of this widget
     :type parent: tkinter.Widget
@@ -299,6 +299,15 @@ class LinkDialog(InputDialog):
 
 class NetworkInput(tkinter.Frame):
     """This class implements a GUI to draw a network configuration.
+
+    In the GUI, pressing \"h\" places a host under the cursor, pressing
+    \"r\" places a router under the cursor, left-clicking one component,
+    then a different component, draws a link between the two, and right-
+    clicking one host, then a different host, draws a flow between those
+    hosts.  After two valid endpoints have been given for a link or flow,
+    a dialog box will appear and prompt the user for link/flow parameters.
+    See :class:`LinkDialog` or :class:`FlowDialog` for details on what
+    values these dialog boxes expect.
 
     :param master: Parent of this widget
     :type master: tkinter.Tk
@@ -349,7 +358,7 @@ class NetworkInput(tkinter.Frame):
 
     @property
     def flows(self):
-        """The flows defined on this canvas
+        """The flows defined on this canvas.
 
         :return: a list of flows defined in this network
         :rtype: list
@@ -430,7 +439,7 @@ class NetworkInput(tkinter.Frame):
         link = list()
         for point in self._start, (event.x, event.y):
             endpoint = self._find_item(point[0], point[1], "l", invert=True)
-            if endpoint is not None:
+            if endpoint is not None and endpoint not in link:
                 link.append(endpoint)
 
         # If we have two valid endpoints
@@ -470,6 +479,8 @@ class NetworkInput(tkinter.Frame):
             if self._src is None:
                 # The endpoint we found is the source of a flow
                 self._src = endpoint
+            # Return if the endpoint is already the source
+            if endpoint == self._src:
                 return
 
             # Get flow parameters
@@ -489,6 +500,8 @@ class NetworkInput(tkinter.Frame):
 def draw():
     """Draw the network configuration GUI.
 
+    See :class:`test.Network` for details on the output format.
+
     :return: returns drawn network as (adjacency list, flows)
     :rtype: (list, list)
     """
@@ -499,6 +512,3 @@ def draw():
     # Run GUI
     tkinter.mainloop()
     return canvas.links, canvas.flows
-
-if __name__ == "__main__":
-    draw()
