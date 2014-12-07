@@ -238,10 +238,6 @@ class FAST(TCP):
         self._next = deque(maxlen=4)
         # Window updating process
         self._window_ctrl_proc = None
-        # Monitor queuing delay periodically
-        self.flow.env.register(
-            "Queuing delay,{},{}".format(self.flow.host.addr, self.flow.id),
-            lambda: self._delay)
 
     def _estimate(self, trip):
         """Update the mean round trip time & estimated queuing delay.
@@ -605,9 +601,6 @@ class Flow:
             "Round trip times,{},{}".format(self._host.addr, self._id),
             self._avg_rtt)
         self.env.register(
-            "Flow received,{},{}".format(self._host.addr, self._id),
-            lambda: self.reset("_received"), True)
-        self.env.register(
             "Flow transmitted,{},{}".format(self._host.addr, self._id),
             lambda: self.reset("_transmitted"), True)
 
@@ -709,7 +702,7 @@ class Flow:
             # Send this acknowledgement to the TCP algorithm
             yield self.env.process(self._tcp.acknowledge(ack))
         except KeyError:
-            logger.warning('Got two ACK\'s for packet {}'.format(ack.id))
+            logger.warning("Got two ACK\'s for packet {}".format(ack.id))
 
     def generate(self):
         """Generate packets from this flow.
@@ -785,8 +778,6 @@ class Host:
         # Bits received by host
         self._received = 0
 
-        self.env.register("Host received,{}".format(self._addr),
-                          lambda: self.reset("_received"), True)
         self.env.register("Host transmitted,{}".format(self._addr),
                           lambda: self.reset("_transmitted"), True)
 
@@ -1125,7 +1116,7 @@ class Router:
         # Dictionary used to assess local convergence of routing tables
         self._finish_table = dict()
         # Arrival time of most recently processed routing packet
-        self._last_arrival = float('inf')
+        self._last_arrival = float("inf")
         # Flag indicating if router has converged
         self._converged = False
         # timeout duration used to determine routing table convergence
@@ -1232,7 +1223,7 @@ class Router:
             for key, value in self._update_table.items():
                 self._routing_table[key] = value
             # and reset all variables used for tracking convergence
-            self._last_arrvial = float('inf')
+            self._last_arrvial = float("inf")
             self._converged = False
             self._finish_table = dict()
             self._update_table = dict()
@@ -1257,7 +1248,7 @@ class Router:
                 for transport in self._links:
                     # check for any direct connections to hosts
                     if Host in map(type, transport.link.endpoints):
-                        logger.debug('Bellman-Ford routing table update')
+                        logger.debug("Bellman-Ford routing table update")
                         host = next(filter(lambda e: type(e) == Host,
                                            transport.link.endpoints))
                         # update routing table for this router

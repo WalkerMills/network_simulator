@@ -1,0 +1,48 @@
+#! /usr/bin/env python3
+
+if __name__ == "__main__":
+    import argparse
+
+    import gui
+    import test
+
+    # Initialize parser
+    parser = argparse.ArgumentParser(
+        description="Run a network simulation, and graph or save the output.  "
+                    "You may use flags to choose among the predefined test "
+                    "cases, and if so, another flag may be used to specify "
+                    "which TCP algorithm to use.  If no case flag is given, "
+                    "the input GUI will appear, and you can draw an arbitrary "
+                    "network (the TCP flag will be ignored).")
+    case = parser.add_mutually_exclusive_group()
+    tcp = parser.add_mutually_exclusive_group()
+    case.add_argument("-0", "--zero", dest="zero", action="store_const",
+                      const=0, default=-1, help="Test case 0")
+    case.add_argument("-1", "--one", dest="one", action="store_const",
+                      const=1, default=-1, help="Test case 1")
+    case.add_argument("-2", "--two", dest="two", action="store_const",
+                      const=2, default=-1, help="Test case 2")
+    tcp.add_argument("-f", "--fast", dest="fast", action="store_true",
+                     default=True, help="FAST TCP (default)")
+    tcp.add_argument("-r", "--reno", dest="reno", action="store_true",
+                     default=False, help="TCP Reno")
+    parser.add_argument("-s", "--save", dest="save", action="store_true",
+                        default=False, help="Save graphs (default is display)")
+    # Parse all command line options
+    parsed = parser.parse_args()
+    try:
+        # Get the test case number
+        test_case = next(filter(lambda c: c > -1, 
+                                [parsed.zero, parsed.one, parsed.two]))
+        # Get the specified TCP algorithm
+        tcp_spec = "FAST" if parsed.fast else "Reno"
+        # Generate the correct adjacencu list
+        adj = test.TestCase.adjacent(test.Case(test_case), tcp_spec)
+    # If no case was specified
+    except StopIteration:
+        # Draw the GUI
+        adj = gui.draw()
+    # Initialize the graphing object (run the simulation)
+    g = test.Graph(adj)
+    # Display/save the output
+    g.graph_all(save=parsed.save)

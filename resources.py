@@ -115,7 +115,7 @@ class MonitoredEnvironment(simpy.core.Environment):
         :return: None
         """
         if name in self._monitored.keys():
-            raise ValueError('duplicate identifier \'{}\''.format(name))
+            raise ValueError("duplicate identifier \"{}\"".format(name))
         # If no step was given
         if step is None:
             # Use the default step
@@ -611,7 +611,7 @@ class HostResource(PacketQueue):
             else:
                 # Push the ID expected after this packet onto the heap
                 heapq.heappush(heap, event.packet.id + 1)
-            # Pop any ID's for packet's we've already received
+            # Pop any ID"s for packet"s we've already received
             while heap[0] + 1 in heap[1:3]:
                 heapq.heappop(heap)
             # Return an acknowledgement with the next expected ID

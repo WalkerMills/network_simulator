@@ -300,6 +300,15 @@ class LinkDialog(InputDialog):
 class NetworkInput(tkinter.Frame):
     """This class implements a GUI to draw a network configuration.
 
+    In the GUI, pressing \"h\" places a host under the cursor, pressing
+    \"r\" places a router under the cursor, left-clicking one component,
+    then a different component, draws a link between the two, and right-
+    clicking one host, then a different host, draws a flow between those
+    hosts.  After two valid endpoints have been given for a link or flow,
+    a dialog box will appear and prompt the user for link/flow parameters.
+    See :class:`LinkDialog` or :class:`FlowDialog` for details on what
+    values these dialog boxes expect.
+
     :param master: Parent of this widget
     :type master: tkinter.Tk
     :param width_: Width of the GUI window
@@ -430,7 +439,7 @@ class NetworkInput(tkinter.Frame):
         link = list()
         for point in self._start, (event.x, event.y):
             endpoint = self._find_item(point[0], point[1], "l", invert=True)
-            if endpoint is not None:
+            if endpoint is not None and endpoint not in link:
                 link.append(endpoint)
 
         # If we have two valid endpoints
@@ -470,6 +479,8 @@ class NetworkInput(tkinter.Frame):
             if self._src is None:
                 # The endpoint we found is the source of a flow
                 self._src = endpoint
+            # Return if the endpoint is already the source
+            if endpoint == self._src:
                 return
 
             # Get flow parameters

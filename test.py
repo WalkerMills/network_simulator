@@ -84,7 +84,7 @@ class Graph:
         # For each monitored value
         for key, raw in monitored.items():
             # Extract the monitored title & identifying tags
-            title, *tags = key.split(',')
+            title, *tags = key.split(",")
             # If this is the first value of this category processed
             if title not in self._data.keys():
                 # Create a new entry for its category
@@ -111,7 +111,7 @@ class Graph:
         :param str title: graph title
         :param datasets: a list of tagged data sets given as (tags, x, y)
         :type datasets: [(tuple, ``numpy.ndarray``, ``numpy.ndarray``)]
-        :param str legend: legend label for each data set (e.g. \'flow\')
+        :param str legend: legend label for each data set (e.g. \"flow\")
         :param str y_label: label for the plot\'s y axis
         :param float scale: y is multiplied by ``scale`` before graphing
         :param bool save: flag indicating whether to save or display figures
@@ -128,7 +128,7 @@ class Graph:
         for tags, x, y in datasets:
             y = y * scale
             # Plot the data set, and make a legend entry for it
-            plt.plot(x, y, label="{} {}".format(legend, ','.join(tags)))
+            plt.plot(x, y, label="{} {}".format(legend, ",".join(tags)))
         # Create the plot legend
         plt.legend()
         # If the graphing flag is set
@@ -139,7 +139,7 @@ class Graph:
             # Save the plot
             plt.savefig(title + ".png")
         # Close all figures
-        plt.close('all')
+        plt.close("all")
 
     def graph_all(self, tags=None, save=False):
         """Graph all data sets.
@@ -220,7 +220,7 @@ class Network:
     :param str tcp: TCP specifier. Used iff adjacent is a :class:`Case`
     """
 
-    def __init__(self, adjacent=None, tcp='FAST'):
+    def __init__(self, adjacent=None, tcp="FAST"):
         # Simulation environment
         self.env = resources.MonitoredEnvironment()
         # Table of hosts in this network
@@ -255,19 +255,19 @@ class Network:
             # For each of the two endpoints
             for node in endpoints:
                 # Add the tag's address to the appropriate set
-                if node.startswith('h'):
+                if node.startswith("h"):
                     hosts.add(int(node[1:]))
                 else:
                     routers.add(int(node[1:]))
 
         # For each host address
         for addr in hosts:
-            logger.debug('creating host {}'.format(addr))
+            logger.debug("creating host {}".format(addr))
             # Make a new host with the given address
             self._hosts[addr] = process.Host(self.env, addr)
         # For each router address
         for addr in routers:
-            logger.debug('creating router {}'.format(addr))
+            logger.debug("creating router {}".format(addr))
             # Make a new router with the given address
             self._routers[addr] = process.Router(self.env, addr)
 
@@ -297,7 +297,7 @@ class Network:
                     log_args.append("router")
                 log_args.append(addr)
 
-            logger.debug('connecting {} {} and {} {}'.format(*log_args))
+            logger.debug("connecting {} {} and {} {}".format(*log_args))
             # Connect the new link to its two endpoints
             link.connect(*endpoints)
             # Persist the new link
@@ -309,7 +309,7 @@ class Network:
             src = self._hosts[int(src_tag[1])]
             # Get the destination address
             dest = int(dest_tag[1])
-            logger.debug('creating flow between hosts {} and {}'.format(
+            logger.debug("creating flow between hosts {} and {}".format(
                 src.addr, dest))
             # Create & persist the new flow
             self._flows.append(process.Flow(self.env, src, dest, data, delay,
@@ -352,37 +352,37 @@ class TestCase:
     """
 
     adjacencies = {
-        Case.zero: ([(('h0', 'h1'), (10000000, 512000, 10000000))], 
-                    [(('h0', 'h1'), (160000000, 1000000000))]),
-        Case.one: ([(('h0', 'r0'), (12500000, 512000, 10000000)),
-                    (('r0', 'r1'), (10000000, 512000, 10000000)),
-                    (('r0', 'r3'), (10000000, 512000, 10000000)),
-                    (('r1', 'r2'), (10000000, 512000, 10000000)),
-                    (('r3', 'r2'), (10000000, 512000, 10000000)),
-                    (('r2', 'h1'), (12500000, 512000, 10000000))],
-                   [(('h0', 'h1'), (160000000, 500000000))]),
-        Case.two: ([(('r0', 'r1'), (10000000, 1024000, 10000000)),
-                    (('r1', 'r2'), (10000000, 1024000, 10000000)),
-                    (('r2', 'r3'), (10000000, 1024000, 10000000)),
-                    (('h0', 'r0'), (12500000, 1024000, 10000000)),
-                    (('h1', 'r0'), (12500000, 1024000, 10000000)),
-                    (('h2', 'r2'), (12500000, 1024000, 10000000)),
-                    (('h3', 'r3'), (12500000, 1024000, 10000000)),
-                    (('h4', 'r1'), (12500000, 1024000, 10000000)),
-                    (('h5', 'r3'), (12500000, 1024000, 10000000))],
-                   [(('h0', 'h3'), (280000000, 500000000)),
-                    (('h1', 'h4'), (120000000, 10000000000)),
-                    (('h2', 'h5'), (240000000, 20000000000))])
+        Case.zero: ([(("h0", "h1"), (10000000, 512000, 10000000))], 
+                    [(("h0", "h1"), (160000000, 1000000000))]),
+        Case.one: ([(("h0", "r0"), (12500000, 512000, 10000000)),
+                    (("r0", "r1"), (10000000, 512000, 10000000)),
+                    (("r0", "r3"), (10000000, 512000, 10000000)),
+                    (("r1", "r2"), (10000000, 512000, 10000000)),
+                    (("r3", "r2"), (10000000, 512000, 10000000)),
+                    (("r2", "h1"), (12500000, 512000, 10000000))],
+                   [(("h0", "h1"), (160000000, 500000000))]),
+        Case.two: ([(("r0", "r1"), (10000000, 1024000, 10000000)),
+                    (("r1", "r2"), (10000000, 1024000, 10000000)),
+                    (("r2", "r3"), (10000000, 1024000, 10000000)),
+                    (("h0", "r0"), (12500000, 1024000, 10000000)),
+                    (("h1", "r0"), (12500000, 1024000, 10000000)),
+                    (("h2", "r2"), (12500000, 1024000, 10000000)),
+                    (("h3", "r3"), (12500000, 1024000, 10000000)),
+                    (("h4", "r1"), (12500000, 1024000, 10000000)),
+                    (("h5", "r3"), (12500000, 1024000, 10000000))],
+                   [(("h0", "h3"), (280000000, 500000000)),
+                    (("h1", "h4"), (120000000, 10000000000)),
+                    (("h2", "h5"), (240000000, 20000000000))])
     }
     """Edge & flow adjacency lists for each test case."""
 
     tcp_parameters = {
-        Case.zero: {'FAST': [[1, 30000000, 45]], 'Reno': [[1, 30000000]]}, 
-        Case.one: {'FAST': [[1, 120000000, 20]], 'Reno': [[1, 120000000]]},
-        Case.two: {'FAST': [[1, 150000000, 6], 
+        Case.zero: {"FAST": [[1, 30000000, 45]], "Reno": [[1, 30000000]]}, 
+        Case.one: {"FAST": [[1, 120000000, 20]], "Reno": [[1, 120000000]]},
+        Case.two: {"FAST": [[1, 150000000, 6], 
                             [1, 90000000, 6],
                             [1, 90000000, 6]],
-                   'Reno': [[1, 1500000000], 
+                   "Reno": [[1, 1500000000], 
                             [1, 90000000],
                             [1, 90000000]]}
     }
@@ -406,9 +406,9 @@ class TestCase:
         """
         # Check for valid parameters
         if not isinstance(case, Case):
-            raise ValueError("invalid test case \'{}\'".format(case))
+            raise ValueError("invalid test case \"{}\"".format(case))
         if tcp not in process.Flow.allowed_tcp.keys():
-            raise ValueError("invalid TCP specifier \'{}\'".format(tcp))
+            raise ValueError("invalid TCP specifier \"{}\"".format(tcp))
 
         # Initialize list of flows
         flows = list()
