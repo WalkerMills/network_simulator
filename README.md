@@ -22,7 +22,7 @@ must install the Python module dependencies
 # apt-get install python3-simpy python3-tk python3-numpy python3-matplotlib -y
 ```
 
-On Arch Linux:
+On Arch Linux, Python 3.4 is the default Python version, so you must simply
 ```
 # pacman -S simpy python-pmw python-numpy python-matplotlib --noconfirm
 ```
