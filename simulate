@@ -13,7 +13,13 @@ if __name__ == "__main__":
                     "cases, and if so, another flag may be used to specify "
                     "which TCP algorithm to use.  If no case flag is given, "
                     "the input GUI will appear, and you can draw an arbitrary "
-                    "network (the TCP flag will be ignored).")
+                    "network (the TCP flag will be ignored).  If you draw a "
+                    "network using the GUI, all id's are assigned by order of "
+                    "creation.  Otherwise, they are assigned within the test "
+                    "cases (adjacency lists) defined in the test module (see "
+                    "the TestCase factory class for details).  The test cases "
+                    "only support homogenous flows (same TCP algorithm), but "
+                    "the GUI may be used to create heterogenous networks.")
     case = parser.add_mutually_exclusive_group()
     tcp = parser.add_mutually_exclusive_group()
     case.add_argument(
@@ -35,13 +41,14 @@ if __name__ == "__main__":
         "-s", "--save", dest="save", action="store_true", default=False,
         help="Save graphs (default is display)")
     parser.add_argument(
-        "-f", "--flows", dest="flows", type=str, nargs="+", default=list(),
-        help="Flow id's to display output for, given as \"host id,flow id\"")
+        "-f", "--flows", dest="flow", type=str, nargs="+", default=list(),
+        help="Flow id's to display output for, given as \"source host id,flow"
+             " id\"")
     parser.add_argument(
-        "-H", "--hosts", dest="hosts", type=int, nargs="+", default=list(),
+        "-H", "--hosts", dest="host", type=int, nargs="+", default=list(),
         help="Host id's to display output for")
     parser.add_argument(
-        "-l", "--links", dest="links", type=int, nargs="+", default=list(),
+        "-l", "--links", dest="link", type=int, nargs="+", default=list(),
         help="Link id's to display output for")
     # Parse all command line options
     parsed = parser.parse_args()
@@ -51,7 +58,7 @@ if __name__ == "__main__":
                                 [parsed.zero, parsed.one, parsed.two]))
         # Get the specified TCP algorithm
         tcp_spec = "FAST" if parsed.fast else "Reno"
-        # Generate the correct adjacencu list
+        # Generate the correct adjacency list
         adj = test.TestCase.adjacent(test.Case(test_case), tcp_spec)
     # If no case was specified
     except StopIteration:
@@ -59,12 +66,13 @@ if __name__ == "__main__":
         adj = gui.draw()
     # Parse the inputted tags into the form expected by test.Graph methods,
     # and map legend labels to tags
-    input_tags = {"host": [(h,) for h in parsed.hosts],
-                  "link": sum(([(l, 0), (l, 1)] for l in parsed.links), [])}
-    if parsed.flows:
-        input_tags["flow"] = [tuple(int(t) for t in parsed.flows)]
+    input_tags = {"host": [(h,) for h in parsed.host],
+                  "link": sum(([(l, 0), (l, 1)] for l in parsed.link), [])}
+    if parsed.flow:
+        input_tags["flow"] = \
+            [tuple(map(int, f.split(","))) for f in parsed.flow]
     else:
-        input_tags["flow"] = parsed.flows
+        input_tags["flow"] = parsed.flow
     # Assign host, flow, and link tags to data sets by legend label
     filter_tags = dict()
     for title, kwargs in test.Graph.title_kwargs.items():
