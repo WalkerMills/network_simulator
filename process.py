@@ -4,15 +4,15 @@
     :synopsis: This module defines network actors as processes
 """
 
+import abc
 import itertools
 import logging
 import math
+import queue
 import random
 import simpy
-import collections
 
 from collections import deque
-from queue import Queue, Empty
 
 import resources
 
@@ -20,24 +20,208 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 
-class FAST(object):
-    """SimPy process implementing FAST TCP.
+class TCP(metaclass=abc.ABCMeta):
+    """TCP algorithm abstract base class.
+
+    This class defines a number of properties & utility functions for
+    use by subclasses, as well as a mostly abstract API for use by the
+    :class:`Flow` class.
 
     :param flow: the flow to link this TCP instance to
     :type flow: :class:`Flow`
     :param int window: initial window size (packets)
-    :param int timeout: packet acknowledgement timeout (simulation time)
-    :param int alpha: desired number of enqueued packets at equilibrium
-    :param float gamma: window update weight
+    :param int timeout: packet acknowledgement timeout (ns)
     """
 
-    def __init__(self, flow, window, timeout, alpha, gamma=0.5):
+    def __init__(self, flow, window, timeout):
         # The flow running this TCP algorithm
         self._flow = flow
         # Window size (packets)
         self._window = window
         # Time after which packets are considered dropped
         self._timeout = timeout
+
+        # Packet generator
+        self._gen = self._flow.generator()
+        # Hash table mapping unacknowledged packet -> departure time
+        self._unacknowledged = dict()
+        # Finish event
+        self._finished = simpy.events.Event(self._flow.env)
+
+    @property
+    def finished(self):
+        """Transmission finished event.
+
+        This event is only successful once all data packets have been
+        sent, and any dropped packets retransmitted successfully.
+
+        :return: finish event
+        :rtype: ``simpy.events.Event``
+        """
+        return self._finished
+
+    @property
+    def flow(self):
+        """The flow that this TCP algorithm is connected to.
+
+        :return: host flow
+        :rtype: :class:`Flow`
+        """
+        return self._flow
+
+    @property
+    def timed_out(self):
+        """List of timed out packets.
+
+        :return: timed out packets
+        :rtype: [:class:`resources.Packet`]
+        """
+        return [p for p, t in self._unacknowledged.items() 
+                if t <= self.flow.env.now - self._timeout]
+
+    @property
+    def timeout(self):
+        """The time after which packets are considered dropped.
+
+        :return: acknowledgement timeout (ns)
+        :rtype: int
+        """
+        return self._timeout
+
+    @timeout.setter
+    def timeout(self, timeout):
+        """Set the acknowledgement timeout.
+
+        Timeouts less than 1 are not accepted, and will set the timeout
+        to 1.
+
+        :param int timeout:
+        :return: None
+        """
+        self._timeout = max(timeout, 1)
+
+    @property
+    def unacknowledged(self):
+        """Unacknowledged packet dictionary.
+
+        This dictionary maps unackowledged packets to their departure time.
+
+        :return: unackowledged packets
+        :rtype: {:class:`resources.Packet`: int}
+        """
+        return self._unacknowledged
+
+    @property
+    def window(self):
+        """Transmission window size (bits).
+
+        :return: window size (bits)
+        :rtype: int
+        """
+        return self._window
+
+    @window.setter
+    def window(self, window):
+        """Set the window size.
+
+        Window sizes less than 1 are not accepted, and will set the window
+        to 1.
+
+        :param int window: new window size
+        :return: None
+        """
+        self._window = max(window, 1)
+
+    @abc.abstractmethod
+    def acknowledge(self, ack):
+        """Process an acknowledgement packet.
+
+        This abstract method must be implemented by a subclass.
+
+        :param ack: the acknowledgement packet
+        :type ack: :class:`resources.ACK`
+        :return: None
+        """
+        pass
+
+    def departure(self, pid):
+        """Get the departure time of an unacknowledged packet.
+
+        Raises a KeyError if the packet is not currently unacknowledged.
+
+        :return: time, if packet id has a match
+        :rtype: int or None
+        """
+        try:
+            # Retrieve the departure time of the packet with the given id
+            _, time = next(filter(lambda i: i[0].id == pid, 
+                                  self._unacknowledged.items()))
+            return time
+        except StopIteration:
+            raise KeyError("packet {} is not unacknowledged".format(pid))
+
+    def mark(self, pid):
+        """Mark a packet as acknowledged.
+
+        Raises a KeyError if the packet is not currently unacknowledged.
+
+        :param int pid: the id of the packet to acknowledge
+        :return: None
+        """
+        del self._unacknowledged[self.packet(pid)]
+
+    def packet(self, pid):
+        """Get an unacknowledged packet with the given id.
+
+        Raises a KeyError if the packet is not currently unacknowledged.
+
+        :param int pid: packet id
+        :return: the unacknowledged packet
+        :rtype: :class:`resources.Packet`
+        """
+        try:
+            packet = next(filter(lambda p: p.id == pid, 
+                                 self._unacknowledged.keys()))
+            return packet
+        except StopIteration:
+            raise KeyError("packet {} is not unacknowledged".format(pid))
+
+    @abc.abstractmethod
+    def send(self):
+        """Send all data packets.
+
+        This abstract method must be implemented by a subclass.
+
+        :return: None
+        """
+        pass
+
+    def transmit(self, packet):
+        """Transmit a data packet to the host flow.
+
+        :param packet: the data packet to send
+        :type packet: :class:`resources.Packet`
+        :return: None
+        """
+        # Mark the packet as unacknowledged
+        self._unacknowledged[packet] = self._flow.env.now
+        # Transmit the packet
+        yield self._flow.env.process(self._flow.transmit(packet))
+
+
+class FAST(TCP):
+    """SimPy process implementing FAST TCP.
+
+    :param flow: the flow to link this TCP instance to
+    :type flow: :class:`Flow`
+    :param int window: initial window size (packets)
+    :param int timeout: packet acknowledgement timeout (ns)
+    :param int alpha: desired number of enqueued packets at equilibrium
+    :param float gamma: window update weight
+    """
+
+    def __init__(self, flow, window, timeout, alpha, gamma=0.5):
+        super(FAST, self).__init__(flow, window, timeout)
         # Packets in buffer at equilibrium
         self._alpha = alpha
         # Window update weight
@@ -49,46 +233,11 @@ class FAST(object):
         self._min_trip = float("inf")
         # Estimated queuing delay
         self._delay = 0
-        # Packet generator
-        self._gen = self._flow.generator()
-        # Hash table mapping unacknowledged packet -> departure time
-        self._unacknowledged = dict()
-        # Dropped packet (retransmission) queue
-        self._dropped = Queue()
         # Next ID's expected by the destination host.  Last 4 are cached to
         # check for packet dropping (3 duplicate ACK's)
         self._next = deque(maxlen=4)
         # Window updating process
         self._window_ctrl_proc = None
-        # Finish event
-        self._finished = simpy.events.Event(self._flow.env)
-
-    @property
-    def finished(self):
-        """Transmission finished event.
-
-        This event is only successful once all data packets have been
-        sent, and any dropped packets retransmitted successfully.
-        """
-        return self._finished
-
-    @property
-    def timeout(self):
-        """The time after which packets are considered dropped.
-
-        :return: acknowledgement timeout (simulation time)
-        :rtype: int
-        """
-        return self._timeout
-
-    @property
-    def window(self):
-        """Transmission window size, in bits.
-
-        :return: window size (bits)
-        :rtype: int
-        """
-        return self._window
 
     def _estimate(self, trip):
         """Update the mean round trip time & estimated queuing delay.
@@ -98,7 +247,7 @@ class FAST(object):
         and the minimum observed round trip time.
         """
         # Calculate weight for round trip mean update
-        eta = min(3.0 / self._window, 0.25)
+        eta = min(3.0 / self.window, 0.25)
         # If the mean is unset
         if self._mean_trip == float("inf"):
             # Set the mean trip to the given value
@@ -106,37 +255,22 @@ class FAST(object):
         else:
             # Update moving average of round trip mean
             self._mean_trip = (1 - eta) * self._mean_trip + eta * trip
-
         # Update minimum round trip time, if necessary
         if trip < self._min_trip:
             self._min_trip = trip
-
         # Update estimated queuing delay
         self._delay = self._mean_trip - self._min_trip
-        self._flow.env.update(
-            "Queuing delay,{},{}".format(self._flow.host.addr, self._flow.id),
-            self._delay)
-
-    def _update_dropped(self):
-        """Append timed out packets to the dropped packet queue."""
-        # For each unacknowledged packet
-        for packet, time in list(self._unacknowledged.items())[:]:
-            # If it has timed out
-            if time <= self._flow.env.now - self._timeout:
-                # Mark it as dropped
-                self._dropped.put(packet)
-                # Remove it from the unacknowledged packets
-                # del self._unacknowledged[packet]
 
     def _update_window(self):
         """Update the maximum window size."""
         # Calculate the new window size, as directed by FAST TCP spec
-        window = (1 - self._gamma) * self._window + self._gamma * \
-            (self._window * self._min_trip / self._mean_trip + self._alpha)
+        window = (1 - self._gamma) * self.window + self._gamma * \
+            (self.window * self._min_trip / self._mean_trip + self._alpha)
         # Update window size by at most doubling it
-        self._window = min(2 * self._window, window)
-        self._flow.env.update(
-            "Window size,{},{}".format(self._flow.host.addr, self._flow.id), 
+        self.window = min(2 * self.window, window)
+        # Update monitored window size
+        self.flow.env.update(
+            "Window size,{},{}".format(self.flow.host.addr, self.flow.id), 
             self._window)
 
     def _window_control(self):
@@ -144,35 +278,16 @@ class FAST(object):
         try:
             while True:
                 # Wait for acknowledgements
-                yield self._flow.env.timeout(self._timeout)
-                # Update dropped packets
-                self._update_dropped()
-                # If there exist dropped packets
-                if not self._dropped.empty():
+                yield self.flow.env.timeout(self._timeout)
+                # If there exist timed out packets
+                if self.timed_out:
                     # Enter recovery mode (updates window size)
-                    yield self._flow.env.process(self.recover())
+                    yield self.flow.env.process(self.recover())
                 else:
                     # Otherwise, just update the window size
                     self._update_window()
         except simpy.events.Interrupt:
             pass
-
-    def _window_size(self):
-        """Calculate the transimssion window size.
-
-        Window size is equal to the difference in the ID's of the earliest
-        and latest packets sent, plus one.
-        """
-        # If there are no unacknowledged packets
-        if len(self._unacknowledged) == 0:
-            # The window is empty
-            return 0
-        # Sort the unacknowledged ID's
-        ids = sorted(packet.id for packet in self._unacknowledged.keys())
-        # Current window size = difference between the largest & smallest
-        # ID's + 1
-        return ids[-1] - ids[0] + 1
-        # return len(self._unacknowledged)
 
     def acknowledge(self, ack):
         """Process an acknowledgement packet.
@@ -185,101 +300,71 @@ class FAST(object):
         pid = ack.id
         # ID expected next by the destination host
         expected = ack.data
-
         # Push this into the deque (if the deque is full, this is
         # equivalent to self._next.popleft() before appending)
         self._next.append(expected)
-        # Get the unacknowledged packet
-        packet = next(filter(lambda p: p.id == pid, 
-                      self._unacknowledged.keys()))
         # Calculate round trip time
-        rtt = self._flow.env.now - self._unacknowledged[packet]
-        # Mark packet as acknowledged
-        del self._unacknowledged[packet]
+        rtt = self.flow.env.now - self.departure(pid)
+        # If 2 * RTT is greater than the current timeout, update it
+        self.timeout = max(self.timeout, 2 * rtt)
         # Update mean round trip time & queuing delay
         self._estimate(rtt)
+        # Mark packet as acknowledged
+        self.mark(pid)
         # If we have 3 dropped ACK's
         if self._next.count(self._next[0]) == self._next.maxlen:
             # Enter recovery
-            yield self._flow.env.process(self.recover())
+            yield self.flow.env.process(self.recover())
         # If there are more packets to generate
         if self._gen is not None:
             # Try to inject packets into the network
-            yield self._flow.env.process(self.burst())
+            yield self.flow.env.process(self.burst())
 
     def burst(self, recover=False):
         """Inject packets into the network.
 
-        If recover is True, then the packets are taken from the dropped
-        packet queue.
+        If recover is True, then the packets are taken from the set of
+        timed out packets.
 
         :param bool recover: flag for recovery mode
         :return: None
         """
         # If we are in recovery mode
         if recover:
-            # Take packets from the dropped packet queue, as long as there
-            # are packets to take.  If there are multiple simultaneous
-            # burst processes, each will take as many packets as they can
-            # consume before the queue is exhausted
-            gen = (self._dropped.get_nowait() for i in range(
-                    self._dropped.qsize()))
-            # Update the window (size)
-            self._update_window()
+            # Create a dropped packet generator
+            gen = (p for p in self.timed_out[:])
         else:
             # Otherwise, take packets from the data packet generator
             gen = self._gen
         try:
             # While the window is not full
-            while self._window_size() < int(self._window):
-                # Get the next data packet
+            while len(self.unacknowledged) < int(self.window):
+                # Get the next packet
                 packet = next(gen)
                 # Transmit the packet
-                yield self._flow.env.process(self.transmit(packet))
+                yield self.flow.env.process(self.transmit(packet))
                 # If we are in recovery mode
                 if recover:
-                    # Update the window (size)
+                    # Update the window size
                     self._update_window()
-        # Once we have exhausted the packet generator
+        # Once we have exhausted a packet generator
         except StopIteration:
+            # Wait for acknowledgements in the last window
+            yield self.flow.env.timeout(self.timeout)
+            # While there remain dropped packets
+            if self.timed_out:
+                # Retransmit as many dropped packets as possible
+                yield self.flow.env.process(self.recover())
             # If we exhausted the data packet generator
             if not recover:
-                # Set the data packet generator to None
-                self._gen = None
-                # Wait for acknowledgements in the last window
-                yield self._flow.env.timeout(self._timeout)
-                # While there remain dropped packets
-                while not self._dropped.empty():
-                    # Retransmit as many dropped packets as possible
-                    yield self._flow.env.process(self.recover())
-                    # Wait for acknowledgements
-                    yield self._flow.env.timeout(self._timeout)
-                    # Update dropped packets
-                    self._update_dropped()
                 try:
                     # Kill the window control process
                     self._window_ctrl_proc.interrupt()
                 except RuntimeError:
                     pass
                 # Mark this TCP algorithm as finished if it isn't already
-                if not self._finished.triggered:
-                    self._finished.succeed()
-        except Empty:
-            if self._gen is None and not self._finished.triggered:
-                self._finished.succeed()
-
-    def get_departure(self, pid):
-        """Returns the departure time of a packet with given pid
-
-        :return: time, if packet id has a match
-        :rtype: int or None
-        """
-        try:
-            _, time = next(filter(lambda p: p[0].id == pid, 
-                                  self._unacknowledged.items()))
-        except StopIteration:
-            time = None
-        return time
+                if not self.finished.triggered:
+                    self.finished.succeed()
 
     def recover(self):
         """Enter recovery mode.
@@ -287,11 +372,9 @@ class FAST(object):
         :return: None
         """
         # Halve the window size
-        self._window /= 2
-        if self._window < 1:
-            self._window = 1
+        self.window = self.window / 2
         # Retransmit as many dropped packets as possible
-        yield self._flow.env.process(self.burst(recover=True))
+        yield self.flow.env.process(self.burst(recover=True))
 
     def send(self):
         """Send all data packets.
@@ -299,140 +382,62 @@ class FAST(object):
         :return: None
         """
         # Start the window control process
-        self._window_ctrl_proc = self._flow.env.process(self._window_control())
+        self._window_ctrl_proc = self.flow.env.process(self._window_control())
         # Yield a burst process
-        yield self._flow.env.process(self.burst())
-
-    def transmit(self, packet):
-        """Transmit a data packet to the host flow.
-
-        :param packet: the data packet to send
-        :type packet: :class:`resources.Packet`
-        :return: None
-        """
-        # Mark the packet as unacknowledged
-        self._unacknowledged[packet] = self._flow.env.now
-        # Transmit the packet
-        yield self._flow.env.process(self._flow.transmit(packet))
+        yield self.flow.env.process(self.burst())
 
 
-class Reno(object):
+class Reno(TCP):
     """SimPy process implementing TCP Reno.
 
-    :param flow: the flow that is using TCP Reno
+    :param flow: the flow to link this TCP instance to
     :type flow: :class:`Flow`
     :param int window: initial window size (in packets)
     :param int timeout: packet acknowledgement timeout
     """
 
     def __init__(self, flow, window, timeout):
-        # The flow running this TCP algorithm
-        self._flow = flow
-        # window size (packets)
-        self._window = window
-        # Length of time we wait before packets are considered dropped
-        self._timeout = timeout
-
+        super(Reno, self).__init__(flow, window, timeout)
         # flag indicating slow start phase
         self._slow_start = True
         # flag indicating congestion avoidance phase
         self._CA = False
         # flag indicating fast recovery phase
         self._fast_recovery = False
-        
         # Maximum timeout (64 sec)
         self._max_time = 64000000000
         # Slow start threshold
-        self._ssthrsh = 32
-        # Packet generator
-        self._gen = self._flow.generator()
-        # Hash table mapping unacknowledged packet -> departure time
-        self._unacknowledged = dict()
+        self._threshold = 32
         # Next ID's expected by the destination host.  Last 4 are cached to
         # check for packet dropping (3 duplicate ACK's)
         self._next = deque(maxlen=4)
-        # Finish event
-        self._finished = simpy.events.Event(self._flow.env)
-
-    @property
-    def finished(self):
-        """Transmission finished event.
-
-        This event is only successful once all data packets have been
-        sent, and any dropped packets retransmitted successfully.
-
-        :return: finished event
-        :rtype: ``simpy.events.Event``
-        """
-        return self._finished
-
-    @property
-    def timeout(self):
-        """The time after which packets are considered dropped.
-
-        :return: acknowledgement timeout (simulation time)
-        :rtype: int
-        """
-        return self._timeout
-
-    @property
-    def window(self):
-        """Transmission window size, in packets.
-
-        :return: window size (packets)
-        :rtype: int
-        """
-        return self._window
+        # Waiting process for acknowledgements
+        self._wait_proc = None
 
     def _wait(self):
         """Wait for acknowledgements; time out if none are recieved."""
         try:
             # Wait for acknowledgement(s)
-            yield self._flow.env.timeout(self._timeout)
-            logger.debug("timeout occurred".format(self._window))
-            # For each unacknowledged packet
-            for packet, time in list(self._unacknowledged.items())[:]:
-                # If it has timed out
-                if time <= self._flow.env.now - self._timeout:
-                    # Immediately retransmit the packet
-                    self.transmit(packet)
-
+            yield self.flow.env.timeout(self.timeout)
+            logger.debug("timeout occurred".format(self.window))
+            # Retransmit dropped packets
+            yield self.flow.env.process(self.burst(timeout=True))
             # Set the slow start threshold to half the window size
-            self._ssthrsh = self._window / 2
-            if self._ssthrsh == 0:
-                self._ssthrsh = 1
+            self._threshold = max(self.window / 2, 1)
             # Reset window size
-            self._window = 1
-            self._flow.env.update(
-                "Window size,{},{}".format(self._flow.host.addr, 
-                                           self._flow.id),
-                self._window)
-            # Double timeout length
-            #if self._timeout < self._max_time:
-            #    self._timeout *= 2
-            #revert to slow start on timeout
+            self.window = 1
+            # Update monitored window size
+            self.flow.env.update(
+                "Window size,{},{}".format(self.flow.host.addr, 
+                                           self.flow.id),
+                self.window)
+            # Revert to slow start on timeout
             self._slow_start = True
             self._fast_recovery = False
             self._CA = False
-
         except simpy.Interrupt:
+            # Reset the waiting process on interruption
             self._wait_proc = None
-
-    def _window_size(self):
-        """Calculate the transimssion window size.
-
-        Window size is equal to the difference in the ID's of the earliest
-        and latest packets sent, plus one.
-        """
-        # If there are no unacknowledged packets
-        if len(self._unacknowledged) == 0:
-            # The window is empty
-            return 0
-        # Sort the unacknowledged ID's
-        ids = sorted(packet.id for packet in self._unacknowledged.keys())
-        # Current window size = difference between the largest & smallest
-        # ID's + 1
-        return ids[-1] - ids[0] + 1
 
     def acknowledge(self, ack):
         """Process an acknowledgement packet.
@@ -442,10 +447,8 @@ class Reno(object):
         :return: None
         """
         # Stop the waiting process, if any
-        if self._wait_proc is not None:
+        if self._wait_proc:
             self._wait_proc.interrupt()
-            self._wait_proc = None
-
         # ID of the packet being acknowledged
         pid = ack.id
         # ID expected next by the destination host
@@ -453,132 +456,101 @@ class Reno(object):
         # Push this into the deque (if the deque is full, this is
         # equivalent to self._next.popleft() before appending)
         self._next.append(expected)
-        # Get the unacknowledged packet
-        packet = next(filter(lambda p: p.id == pid,
-                      self._unacknowledged.keys()))
-        
-        # mark the packet as acknowledged
-        del self._unacknowledged[packet]
-
+        # Calculate round trip time
+        rtt = self.flow.env.now - self.departure(pid)
+        # Mark packet as acknowledged
+        self.mark(pid)
+        # If 2 * RTT is greater than the current timeout, update it
+        self.timeout = max(self.timeout, 2 * rtt)
         #if in slow start phase
         if self._slow_start == True:
-            self._window += 1
-            logger.debug("slow start {}, ssthrsh {}".format(self._window,
-                                                              self._ssthrsh))
-            self._flow.env.update(
-                "Window size,{},{}".format(self._flow.host.addr, 
-                                           self._flow.id),
-                self._window)
-            if self._window >= self._ssthrsh:
+            self.window += 1
+            logger.debug("slow start {} < {}".format(self.window, 
+                                                     self._threshold))
+            if self.window >= self._threshold:
                 self._slow_start = False
                 self._CA = True
-
         # if in congestion avoidance phase
         elif self._CA == True:
-            logger.debug("congestion avoidance {}".format(self._window))
-            # If we have 3 duplicate ACK's
+            logger.debug("congestion avoidance {}".format(self.window))
+            # If we have 3 duplicate ACK's, perform fast retransmission
             if self._next.count(self._next[0]) == self._next.maxlen:
-                # enter fast transmit mode
-                self._ssthrsh = self._window / 2
-                self._window = self._ssthrsh + 3
-                self._flow.env.update(
-                    "Window size,{},{}".format(self._flow.host.addr, 
-                                               self._flow.id),
-                    self._window)
-                # set flag so flow is in fast recovery mode until all
-                # transmitted packets are acknowledged
+                # Set slow start threshold to half of the window size
+                self._threshold = self.window / 2
+                # Set window size to the threshold + number of duplicates
+                self.window = self._threshold + self._next.maxlen - 1
+                # Enter fast recovery mode
                 self._fast_recovery = True
                 self._CA = False
-                dropped = next(filter(lambda p: p.id == expected,
-                           self._unacknowledged.keys()))
+                # Get the dropped packet
+                dropped = self.packet(expected)
                 # immediately retransmit the dropped packet
-                yield self._flow.env.process(self.transmit(dropped))
+                yield self.flow.env.process(self.transmit(dropped))
                 # wait for timeout
-                self._wait_proc = self._flow.env.process(self._wait())
+                self._wait_proc = self.flow.env.process(self._wait())
                 yield self._wait_proc 
             else:
                 #otherwise increment window size for successful ack
-                self._window += 1 / self._window
-                self._flow.env.update(
-                    "Window size,{},{}".format(self._flow.host.addr, 
-                                               self._flow.id),
-                    self._window)
+                self.window += 1 / self.window
         # if in fast recovery phase
         elif self._fast_recovery == True:
-            logger.debug("fast recovery {}".format(self._window))
+            logger.debug("fast recovery {}".format(self.window))
             # don't make any adjustments until there's a timeout, or
             # entire transmitted window is acknowledged
-            for k in self._unacknowledged.keys():
+            for k in self.unacknowledged.keys():
                 logger.debug("unacknowledged: {}".format(k.id))
-            if len(self._unacknowledged.items()) == 0:
-                    self._fast_recovery = False
-                    self._CA = True
+            if len(self.unacknowledged.items()) == 0:
+                self._fast_recovery = False
+                self._CA = True
+        # Update monitored window size
+        self.flow.env.update(
+            "Window size,{},{}".format(self.flow.host.addr, 
+                                       self.flow.id),
+            self.window)
 
-    def get_departure(self, pid):
-        """Returns the departure time of a packet with given pid.
-
-        If there is a match for the packet id, return its departure time,
-        otherwise, return None
-
-        :return: departure time
-        :rtype: int or None
-        """
+    def burst(self, timeout=False):
+        if timeout:
+            # Make a timed out packet generator
+            gen = (p for p in self.timed_out[:])
+        else:
+            gen = self._gen
         try:
-            _, time = next(filter(lambda p: p[0].id == pid, 
-                                  self._unacknowledged.items()))
+            # While we have room in the window
+            while timeout or len(self.unacknowledged) < int(self.window):
+                # Get the next packet
+                packet = next(gen)
+                # Transmit the packet
+                yield self.flow.env.process(self.transmit(packet))
+            # Wait for acknowledgements, or timeout
+            self._wait_proc = self.flow.env.process(self._wait())
+            yield self._wait_proc
         except StopIteration:
-            time = None
-        return time
+            if not timeout:
+                # While there are unacknowledged packets
+                while self.unacknowledged:
+                    # Wait for acknowledgements, or timeout & recover
+                    self._wait_proc = self.flow.env.process(self._wait())
+                    yield self._wait_proc
+                # Mark this TCP algorithm as finished, if it isn't already
+                if not self._finished.triggered:
+                    self._finished.succeed()
 
     def send(self):
         """Send all data packets.
 
         :return: None
         """
-        try:
-            while True:
-                # While we have room in the window
-                while self._window_size() < self._window:
-                    # Get the next data packet
-                    packet = next(self._gen)
-                    # Transmit the data packet
-                    yield self._flow.env.process(self.transmit(packet))
-                # Wait for acknowledgements, or timeout
-                self._wait_proc = self._flow.env.process(self._wait())
-                yield self._wait_proc
-        except StopIteration:
-            # Wait for packets in the last window
-            self._wait_proc = self._flow.env.process(self._wait())
-            yield self._wait_proc
-            # If there remain unacknowledged packets
-            if len(self._unacknowledged) > 0:
-                # Make a generator for the dropped packets
-                self._gen = (p for p in list(self._unacknowledged.keys())[:])
-                # Resend all dropped packets
-                yield self._flow.env.process(self.send())
-            # Mark this TCP algorithm as finished, if it isn't already
-            if not self._finished.triggered:
-                self._finished.succeed()
-
-    def transmit(self, packet):
-        """Transmit a data packet to the host flow.
-
-        :param packet: the data packet to send
-        :type packet: :class:`resources.Packet`
-        :return: None
-        """
-        # Mark the packet as unacknowledged
-        self._unacknowledged[packet] = self._flow.env.now
-        # Transmit the packet
-        yield self._flow.env.process(self._flow.transmit(packet))
+        while True and not self._finished.triggered:
+            yield self.flow.env.process(self.burst())
 
 
-class Flow(object):
+@resources.reset
+class Flow:
     """SimPy process representing a flow.
 
     Each flow process is connected to a source host, and generates as
     many packets as are necessary to send all of its data.  If data is
-    None, a random, 8-bit number of packets are sent.  Every flow needs
+    None, a random, 12-bit number of packets are sent.  Every flow needs
     a TCP algorithm to be specified, from among the currently supported
     TCP algorithms.  At the moment, the only allowed specifiers are 
     \"FAST\", and \"Reno\".  See :class:`FAST` or :class:`Reno` for 
@@ -589,23 +561,23 @@ class Flow(object):
     :type host: :class:`Host`
     :param int dest: the address of the destination host
     :param int data: the total amount of data to transmit (bits)
-    :param int delay: the simulation time to wait before sending any packets
+    :param int delay: initial delay before sending any packets (ns)
     :param str tcp: TCP algorithm specifier
     :param list tcp_params: parameters for the TCP algorithm
     """
 
     allowed_tcp = {"FAST": FAST, "Reno": Reno}
-    """A dict mapping TCP specifiers to implementations (classes)."""
+    """A dict mapping TCP specifiers to :class:`TCP` subclasses."""
 
     def __init__(self, env, host, dest, data, delay, tcp, tcp_params):
-        self.env = env
+        self._env = env
         # Flow host
         self._host = host
         # FLow destination
         self._dest = dest
         # Amount of data to transmit (bits)
         self._data = data
-        # Time (simulation time) to wait before initial transmission
+        # Time (ns) to wait before initial transmission
         self._delay = delay
         # Bits transmitted by flow
         self._transmitted = 0
@@ -614,7 +586,7 @@ class Flow(object):
         # List of roundtrip times for packets in given timestep
         self._times = list()
         # Register this flow with its host, and get its ID
-        self._id = self.host.register(self)
+        self._id = self._host.register(self)
         # Check for a valid TCP specifier
         try:
             # Initialize TCP object
@@ -629,11 +601,8 @@ class Flow(object):
             "Round trip times,{},{}".format(self._host.addr, self._id),
             self._avg_rtt)
         self.env.register(
-            "Flow received,{},{}".format(self._host.addr, self._id),
-            lambda: self._reset("_received"), True, True)
-        self.env.register(
-            "Flow transmitted,{},{}".format(self._host.addr, self.id),
-            lambda: self._reset("_transmitted"), True, True)
+            "Flow rate,{},{}".format(self._host.addr, self._id),
+            lambda: self.reset("_transmitted"), True)
 
     @property
     def dest(self):
@@ -652,6 +621,15 @@ class Flow(object):
         :rtype: int
         """
         return self._data
+
+    @property
+    def env(self):
+        """The simulation environment.
+
+        :return: SimPy environment
+        :rtype: ``simpy.core.Environment``
+        """
+        return self._env
 
     @property
     def finished(self):
@@ -693,16 +671,10 @@ class Flow(object):
             avg = self._mean_rtt
         return avg
 
-    def _reset(self, attr):
-        """Get the value of the specified attribute, and reset it to 0."""
-        ret = getattr(self, attr)
-        setattr(self, attr, 0)
-        return ret
-
     def _update_rtt(self, pid):
         """Update list of packet RTT's."""
         # Get departure time of packet
-        depart = self._tcp.get_departure(pid)
+        depart = self._tcp.departure(pid)
         if depart is None:
             return
         # Calcualte roundtrip time of packet
@@ -720,16 +692,17 @@ class Flow(object):
         :type ack: :class:`resources.ACK`
         :return: None
         """
-        #logger.debug("flow {}, {} acknowledges packet {} at time {}".format(
-        #    self._id, self._host.addr, ack.id, self.env.now))
-
-        # Update round trip times
-        self._update_rtt(ack.id)
-        # update number of received bits
-        self._received += resources.ACK.size
-
-        # Send this acknowledgement to the TCP algorithm
-        yield self.env.process(self._tcp.acknowledge(ack))
+        logger.debug("flow {}, {} acknowledges packet {} at time {}".format(
+           self._id, self._host.addr, ack.id, self.env.now))
+        try:
+            # Update round trip times
+            self._update_rtt(ack.id)
+            # update number of received bits
+            self._received += resources.ACK.size
+            # Send this acknowledgement to the TCP algorithm
+            yield self.env.process(self._tcp.acknowledge(ack))
+        except KeyError:
+            logger.warning("Got two ACK\'s for packet {}".format(ack.id))
 
     def generate(self):
         """Generate packets from this flow.
@@ -744,21 +717,21 @@ class Flow(object):
 
         If a data size is given, return a generator which yields
         ceil(data size / packet size) packets.  If data size is None,
-        it yields a random, 8-bit number of packets.
+        it yields a random, 12-bit number of packets.
 
         :return: packet generator
         :rtype: generator
         """
         n = 0
         if self._data == None:
-            # Pick a random, 8-bit number of packets to send
-            n = random.getrandbits(8)
+            # Pick a random, 12-bit number of packets to send
+            n = random.getrandbits(12)
         else:
             # Calculate how many packets are needed to send self._data bits
             n = math.ceil(self._data / resources.Packet.size)
 
         # Create packet generator
-        g = (resources.Packet(self._host.addr, self.dest, self.id, i)
+        g = (resources.Packet(self._host.addr, self._dest, self._id, i)
              for i in range(n))
 
         return g
@@ -779,7 +752,8 @@ class Flow(object):
             packet.size * 1e9 / self._host.transport.capacity)
 
 
-class Host(object):
+@resources.reset
+class Host:
     """SimPy process representing a host.
 
     Each host process has an underlying HostResource which handles
@@ -792,7 +766,7 @@ class Host(object):
 
     def __init__(self, env, addr):
         # Initialize host resource
-        self.res = resources.HostResource(env, addr)
+        self._res = resources.HostResource(env, addr)
         # Host address
         self._addr = addr
         # Active flows
@@ -804,10 +778,8 @@ class Host(object):
         # Bits received by host
         self._received = 0
 
-        self.res.env.register("Host received,{}".format(self.addr),
-                              lambda: self._reset("_received"), True, True)
-        self.res.env.register("Host transmitted,{}".format(self._addr),
-                              lambda: self._reset("_transmitted"), True, True)
+        self.env.register("Host rate,{}".format(self._addr),
+                          lambda: self.reset("_transmitted"), True)
 
     @property
     def addr(self):
@@ -817,6 +789,15 @@ class Host(object):
         :rtype: int
         """
         return self._addr
+
+    @property
+    def env(self):
+        """The simulation environment.
+
+        :return: SimPy environment
+        :rtype: ``simpy.core.Environment``
+        """
+        return self._res.env
 
     @property
     def flows(self):
@@ -835,12 +816,6 @@ class Host(object):
         :rtype: :class:`Transport` or None
         """
         return self._transport
-
-    def _reset(self, attr):
-        """Get the value of the specified attribute, and reset it to 0."""
-        ret = getattr(self, attr)
-        setattr(self, attr, 0)
-        return ret
 
     def connect(self, transport):
         """Connect a new (link) transport handler to this host.
@@ -874,17 +849,17 @@ class Host(object):
         :param packet: the packet to process
         :type packet: :class:`resources.Packet`
         """
-        if packet.dest == self.addr:
+        if packet.dest == self._addr:
             # update bits received by host
             self._received += packet.size
 
         # Queue new packet for transmission, and dequeue a packet. The
         # HostResource.receive event returns an outbound ACK if the
         # dequeued packet was an inbound data packet
-        packet = yield self.res.receive(packet)
+        packet = yield self._res.receive(packet)
 
         # Transmit the dequeued packet
-        yield self.res.env.process(self.transmit(packet))
+        yield self.env.process(self.transmit(packet))
 
     def register(self, flow):
         """Register a new flow on this host, and return the flow ID.
@@ -911,23 +886,24 @@ class Host(object):
 
         if packet.dest != self._addr:
             logger.debug("host {} transmitting packet {}, {}, {} at time"
-                       " {}".format(self.addr, packet.src, packet.flow, 
-                                    packet.id, self.res.env.now))
+                       " {}".format(self._addr, packet.src, packet.flow, 
+                                    packet.id, self.env.now))
             
             # update bits transmitted by host
             self._transmitted += packet.size
             # Transmit an outbound packet
-            yield self.res.env.process(self._transport.send(packet))
+            yield self.env.process(self._transport.send(packet))
         else:
             logger.debug("host {} processing ACK {}, {}, {} at time"
-                       " {}".format(self.addr, packet.src, packet.flow,
-                                    packet.id, self.res.env.now))
+                       " {}".format(self._addr, packet.src, packet.flow,
+                                    packet.id, self.env.now))
             # Send an inbound ACK to its destination flow
-            yield self.res.env.process(
+            yield self.env.process(
                 self._flows[packet.flow].acknowledge(packet))
 
 
-class Link(object):
+@resources.reset
+class Link:
     """SimPy process representing a link.
 
     Each link process has an underlying LinkResource which handles
@@ -935,34 +911,40 @@ class Link(object):
     link resource, and the processes it may connect.
 
     :param simpy.Environment env: the simulation environment
-    :param int capacity: the link rate, in bits per second
-    :param int size: the link buffer size, in bits
-    :param int delay: the link delay in simulation time
+    :param int capacity: the link rate (bps)
+    :param int size: the link buffer size (bits)
+    :param int delay: the link delay in (ns)
     :param int lid: link id
     """
 
     def __init__(self, env, capacity, size, delay, lid):
         # Initialize link buffers
-        self.res = resources.LinkBuffer(env, size, lid)
+        self._res = resources.LinkBuffer(env, size, lid)
         # Link capacity (bps)
         self._capacity = capacity
-        # Link delay (simulation time)
+        # Link delay (ns)
         self._delay = delay
 
         # Endpoints for each direction
         self._endpoints = [None, None]
-        # "Upload" handler
-        self._up = Transport(self, resources.UP)
         # "Download" handler
         self._down = Transport(self, resources.DOWN)
+        # "Upload" handler
+        self._up = Transport(self, resources.UP)
         # Total number of bits transmitted by link
-        self._transmitted = 0
+        self._transmitted = [0, 0]
         # Buffer flushing processes
-        self._flush_proc = (self.res.env.process(self._flush(resources.UP)),
-                            self.res.env.process(self._flush(resources.DOWN)))
+        self._flush_proc = (self.env.process(self._flush(resources.DOWN)),
+                            self.env.process(self._flush(resources.UP)))
+        # Time to wait between buffer pops if the buffer was empty
+        self._flush_wait = 1000000 # 1 ms
 
-        self.res.env.register("Link transmitted,{}".format(self.res.id),
-                              lambda: self._reset("_transmitted"), True, True)
+        self.env.register(
+            "Link rate,{},{}".format(self._res.id, resources.DOWN),
+            lambda: self.reset("_transmitted", resources.DOWN), True)
+        self.env.register(
+            "Link rate,{},{}".format(self._res.id, resources.UP),
+            lambda: self.reset("_transmitted", resources.UP), True)
 
     @property
     def capacity(self):
@@ -992,28 +974,38 @@ class Link(object):
         return self._endpoints
 
     @property
+    def env(self):
+        """The simulation environment.
+
+        :return: SimPy environment
+        :rtype: ``simpy.core.Environment``
+        """
+        return self._res.env
+
+    @property
     def id(self):
         """Link id.
 
         :return: id
         :rtype: int
         """
-        return self.res.id
+        return self._res.id
 
     def _flush(self, direction):
         """Flush packets from the buffer at the link rate."""
         while True:
-            yield self.res.env.timeout(
-                self.res.last_size[direction] * 1e9 / self._capacity)
-            packet = self.res.dequeue(direction)
+            # Dequeue a packet from the correct buffer
+            packet = self._res.dequeue(direction)
+            # If we got a packet
             if packet is not None:
-                self.res.env.process(self._transmit(direction, packet))
-
-    def _reset(self, attr):
-        """Get the value of the specified attribute, and reset it to 0."""
-        ret = getattr(self, attr)
-        setattr(self, attr, 0)
-        return ret
+                # Limit transmission speed to link bitrate
+                yield self.env.timeout(
+                    packet.size * 1e9 / self._capacity)
+                # Transmit the packet to the conected endpoint
+                self.env.process(self._transmit(direction, packet))
+            else:
+                # Otherwise, wait 1 ms and try again
+                yield self.env.timeout(self._flush_wait)
 
     def _transmit(self, direction, packet):
         """Transmit a packet across the link in a given direction.
@@ -1026,16 +1018,16 @@ class Link(object):
         :type packet: :class:`resources.Packet`
         :return: None
         """
-        logger.debug("link {} transmitting packet {}, {}, {} at time {}".format(
-           self.res.id, packet.src, packet.flow, packet.id, self.res.env.now))
-        # Update total bits transmitted by link
-        self._transmitted += packet.size
-        # update average of buffer fill
-        self.res.update_buffered(direction, self.res.env.now)
+        logger.debug(
+            "link {} transmitting packet {}, {}, {} at time {}".format(
+                self._res.id, packet.src, packet.flow, packet.id, 
+                self.env.now))
         # Transmit packet after waiting, as if sending the packet
         # across a physical link
-        yield simpy.util.start_delayed(self.res.env,
+        yield simpy.util.start_delayed(self.env,
             self._endpoints[direction].receive(packet), self._delay)
+        # Update total bits transmitted by link
+        self._transmitted[direction] += packet.size
 
     def connect(self, A, B):
         """Connect two network components via this link.
@@ -1056,17 +1048,16 @@ class Link(object):
     def cost(self, direction):
         """Return the cost of a direction on this link.
 
-        Total cost is calculated as link delay divided by the logarithm
-        of link capacity divided by (data) packet size, plus the running
-        total of buffer occupancy.
+        Total cost is calculated as propagation delay / log(capacity /
+        data packet size) + cumulative buffer occupancy.
 
-        :param int direction: link direction (to compute cost for)
+        :param int direction: link direction
         :return: directional link cost
         :rtype: float
 
         """
-        return self._delay / math.log(self.capacity / resources.Packet.size) \
-            + self.res.buffered()
+        return self._delay / math.log(self._capacity / resources.Packet.size) \
+            + self._res.buffered(direction)
 
     def disconnect(self):
         """Disconnect a link from its two endpoints.
@@ -1091,11 +1082,14 @@ class Link(object):
         :type packet: :class:`resources.Packet`
         :return: None
         """
-        # Enqueue the new packet, and check if the packet wasn't dropped
-        dropped = yield self.res.enqueue(direction, packet)
+        # Enqueue the new packet, and get the dropped status
+        dropped = yield self._res.enqueue(direction, packet)
+        if not dropped:
+            # update total buffer fill
+            self._res.update_buffered(direction, self.env.now)
 
 
-class Router(object):
+class Router:
     """Simpy process representing a router.
 
     Router objects each have an underlying PacketQueue resource which
@@ -1110,7 +1104,7 @@ class Router(object):
 
     def __init__(self, env, addr):
         # Initialize underlying PacketQueue
-        self.res = resources.PacketQueue(env, addr)
+        self._res = resources.PacketQueue(env, addr)
         # Address of this router (router ID's are independent of host ID's)
         self._addr = addr
         # Set of transports connected to outbound links
@@ -1122,13 +1116,13 @@ class Router(object):
         # Dictionary used to assess local convergence of routing tables
         self._finish_table = dict()
         # Arrival time of most recently processed routing packet
-        self._last_arrival = float('inf')
+        self._last_arrival = float("inf")
         # Flag indicating if router has converged
         self._converged = False
-        # timeout duration used to set routing table to recent update
-        self._timeout = 50000000 #every 0.5s
-        # timeout duration used to set frequency of routing table updates
-        self._bf_period = 5000000000 #every 5s
+        # timeout duration used to determine routing table convergence
+        self._timeout = 50000000 # 50 ms
+        # routing update period (only relevant for routers connected to hosts)
+        self._bf_period = 5000000000 # 5 s
 
     @property
     def addr(self):
@@ -1139,31 +1133,40 @@ class Router(object):
         """
         return self._addr
 
+    @property
+    def env(self):
+        """The simulation environment.
+
+        :return: SimPy environment
+        :rtype: ``simpy.core.Environment``
+        """
+        return self._res.env
+
+    @property
+    def routers(self):
+        """Transport handlers connected to routers.
+
+        :return: a list of outbound transport handlers
+        :rtype: [:class:`Transport`]
+        """
+        return [t for t in self._links 
+                if Host not in map(type, t.link.endpoints)]
+
     def _broadcast_packet(self, host, cost, path, rec_port):
         """Broadcast a routing packet."""
-
+        # Update the routing path
+        new_path = path + [self._addr]
         # create a new routing packet for each outbound link that's
-        # not a host and adjust the cost for each link
-        for transport in self._links:
-            # don't send routing packets to hosts or to the router
-            # that sent the recently received packet.
-            if Host in map(type, transport.link.endpoints) or \
-                transport == rec_port:
+        # not connected a host
+        for t in self.routers:
+            if t == rec_port:
                 continue
-
-            # update packet path and cost
-            #new_path = path + [self._addr]
-            #new_cost = cost + transport.cost
-            # create reference to outbound port for this router on the 
-            # router receiving the packet 
-            #new_port = transport.reverse()
-            # create new packet
-            new_pkt = resources.Routing((host, cost + transport.cost, 
-                path + [self._addr], transport.reverse()))
-            # send the newly created packet
+            # Create a new routing packet with updated rounting information
+            r = resources.Routing((host, cost + t.cost, new_path, t.reverse()))
             logger.debug("R{} broadcasting on L{}".format(self._addr,
-                        transport.link.id))
-            yield self.res.env.process(self.transmit(new_pkt, transport))
+                                                          t.link.id))
+            # send the newly created packet
+            yield self.env.process(self.transmit(r, t))
 
     def _handle_routing_packet(self, packet):
         """Handle a routing or finish packet."""
@@ -1175,51 +1178,43 @@ class Router(object):
             self._finish_table[transport] = True
         # if it's a normal routing packet
         else: 
-            #logger.debug('processing routing packet')
             # extract data from payload
             host, cost, path, rec_port = packet.data
             # update last arrival time of packet
-            self._last_arrival = self.res.env.now
+            self._last_arrival = self.env.now
             # if packet has already gone through router, ignore it
             if self._addr in path:
                 return     
-
             # update new routing table if host isn't in table
             if not (host in self._update_table.keys()):
                 self._update_table[host] = (rec_port, cost)
                 logger.debug("R{} create: L{}, cost {}, H{}".format(
                     self._addr, rec_port.link.id, cost, host))
-                yield self.res.env.process(
+                yield self.env.process(
                     self._broadcast_packet(host, cost, path, rec_port))
-
             # update new routing table if there's a more efficient path
             if self._update_table[host][1] > cost:
-                logger.debug("R{} replace H{}: L{}, cost {} to L{}, cost {}".format(
-                    self._addr, host, self._update_table[host][0].link.id, 
-                    self._update_table[host][1], rec_port.link.id, cost))
+                logger.debug(
+                    "R{} replace H{}: L{}, cost {} to L{}, cost {}".format(
+                        self._addr, host, self._update_table[host][0].link.id, 
+                        self._update_table[host][1], rec_port.link.id, cost))
                 self._update_table[host] = (rec_port, cost)
-                yield self.res.env.process(
+                yield self.env.process(
                     self._broadcast_packet(host, cost, path, rec_port))
-               
             # after receiving a routing packet, begin update timeout
-            yield self.res.env.timeout(self._timeout)
-
+            yield self.env.timeout(self._timeout)
             # check to see if router has reached threshold (for the first time)
-            if self.res.env.now >= self._last_arrival + self._timeout and \
+            if self.env.now >= self._last_arrival + self._timeout and \
                 not self._converged:
                 # set flag
                 self._converged = True
-                logger.debug("router {} self converged".format(self._addr))
-                # and send Finish packets to neighboring routers
-                # not connected to hosts
-                for t in filter(
-                    lambda t: Host not in map(type, t.link.endpoints),
-                    self._links):
-                    #create reference to outbound port for this router 
-                    #on the router recieving the packet
-                    transport_ref = t.reverse()
-                    new_pkt = resources.Finish(transport_ref)
-                    yield self.res.env.process(self.transmit(new_pkt, t))
+                logger.debug("router {} locally converged".format(self._addr))
+                # For each neighboring router
+                for t in self.routers:
+                    # Send a Finish packet pointing to this router to inform
+                    # them that this router has converged
+                    yield self.env.process(
+                        self.transmit(resources.Finish(t.reverse()), t))
 
         # check for one degree of convergence (this router and neighbors)
         if self._converged and all(self._finish_table.values()):
@@ -1228,7 +1223,7 @@ class Router(object):
             for key, value in self._update_table.items():
                 self._routing_table[key] = value
             # and reset all variables used for tracking convergence
-            self._last_arrvial = float('inf')
+            self._last_arrvial = float("inf")
             self._converged = False
             self._finish_table = dict()
             self._update_table = dict()
@@ -1253,25 +1248,25 @@ class Router(object):
                 for transport in self._links:
                     # check for any direct connections to hosts
                     if Host in map(type, transport.link.endpoints):
-                        logger.debug('Bellman-Ford routing table update')
-                        new_host = next(filter(lambda e: type(e) == Host,
-                                               transport.link.endpoints))
+                        logger.debug("Bellman-Ford routing table update")
+                        host = next(filter(lambda e: type(e) == Host,
+                                           transport.link.endpoints))
                         # update routing table for this router
-                        self._update_table[new_host.addr] = (transport, 
+                        self._update_table[host.addr] = (transport, 
                                                              transport.cost)
-                        # get list of transport handlers not connected to hosts
-                        for t in filter(
-                            lambda t: Host not in map(type, t.link.endpoints), 
-                            self._links):
+                        # For each connected router
+                        for t in self.routers:
+                            # Create routing packet for the connected host
                             packet = resources.Routing(
-                                (new_host.addr, transport.cost + t.cost, 
-                                 [self.addr], t.reverse()))
-                            yield self.res.env.process(
+                                (host.addr, transport.cost + t.cost, 
+                                 [self._addr], t.reverse()))
+                            # Send the routing packet
+                            yield self.env.process(
                                 self.transmit(packet, t))
                     else:
                         # initialize _finish_table for neighboring routers
                         self._finish_table[transport] = False
-                yield self.res.env.timeout(self._bf_period)
+                yield self.env.timeout(self._bf_period)
         except simpy.events.Interrupt:
             pass
 
@@ -1311,22 +1306,20 @@ class Router(object):
         :type packet: :class:`resources.Packet`
         :return: None
         """
-        #logger.debug("router {} received packet {}, {}, {} at time {}".format(
-        #    self.addr, packet.src, packet.flow, packet.id, self.res.env.now))
+        logger.debug("router {} received packet {}, {}, {} at time {}".format(
+           self._addr, packet.src, packet.flow, packet.id, self.env.now))
 
         # Push another packet through the queue
-        packet = yield self.res.receive(packet)
+        packet = yield self._res.receive(packet)
         # first determine what type of packet it is, then process it 
         if isinstance(packet, resources.Routing):
-            yield self.res.env.process(self._handle_routing_packet(packet))
+            yield self.env.process(self._handle_routing_packet(packet))
         # handle data packet
         else:
             # look up outbound link using the routing table
             transport = self.route(packet.dest)
             # tranmit packet
-            yield self.res.env.process(self.transmit(packet, transport))
-            # Wait before sending another packet
-            #yield self.res.env.timeout(packet.size * 1e9 / transport.capacity)
+            yield self.env.process(self.transmit(packet, transport))
 
     def transmit(self, packet, transport):
         """Transmit an outbound packet.        
@@ -1337,18 +1330,17 @@ class Router(object):
         :type transport: :class:`Transport`      
         :return: None      
         """              
-        #logger.debug("router {} transmitting packet {}, {}, {} at time "
-        #            "{}".format(self.addr, packet.src, packet.flow, packet.id,
-        #                        self.res.env.now))
+        logger.debug(
+            "router {} transmitting packet {}, {}, {} at time {}".format(
+                self._addr, packet.src, packet.flow, packet.id, 
+                self.env.now))
         # Send the packet      
-        yield self.res.env.process(transport.send(packet))
-
-#TODO:
-#edit docstrings/style 
-#edit logger statements
+        yield self.env.process(transport.send(packet))
+        # Wait packet size / link rate before terminating
+        yield self.env.timeout(packet.size * 1e9 / transport.capacity)
 
 
-class Transport(object):
+class Transport:
     """This class is a directional transport handler for a link.
 
     Direction should be one of :data:`resources.UP` or :data:`resources.DOWN`
@@ -1410,7 +1402,7 @@ class Transport(object):
         :return: transport handler
         :rtype: :class:`Transport`
         """
-        return Transport(self.link, 1 - self.direction)
+        return Transport(self._link, 1 - self._direction)
 
     def send(self, packet):
         """Send a packet across the link.
