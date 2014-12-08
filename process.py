@@ -392,8 +392,8 @@ class Reno(TCP):
 
     :param flow: the flow to link this TCP instance to
     :type flow: :class:`Flow`
-    :param int window: initial window size (in packets)
-    :param int timeout: packet acknowledgement timeout
+    :param int window: initial window size (packets)
+    :param int timeout: packet acknowledgement timeout (ns)
     """
 
     def __init__(self, flow, window, timeout):
@@ -421,7 +421,7 @@ class Reno(TCP):
             yield self.flow.env.timeout(self.timeout)
             logger.debug("timeout occurred".format(self.window))
             # Retransmit dropped packets
-            yield self.flow.env.process(self.burst(timeout=True))
+            yield self.flow.env.process(self.burst(recover=True))
             # Set the slow start threshold to half the window size
             self._threshold = max(self.window / 2, 1)
             # Reset window size
@@ -508,27 +508,35 @@ class Reno(TCP):
                                        self.flow.id),
             self.window)
 
-    def burst(self, timeout=False):
-        if timeout:
+    def burst(self, recover=False):
+        """Inject packets into the network.
+
+        If recover is True, then the packets are taken from the set of
+        timed out packets.
+
+        :param bool recover: flag for recovery mode
+        :return: None
+        """
+        if recover:
             # Make a timed out packet generator
             gen = (p for p in self.timed_out[:])
         else:
             gen = self._gen
         try:
             # While we have room in the window
-            while timeout or len(self.unacknowledged) < int(self.window):
+            while recover or len(self.unacknowledged) < int(self.window):
                 # Get the next packet
                 packet = next(gen)
                 # Transmit the packet
                 yield self.flow.env.process(self.transmit(packet))
-            # Wait for acknowledgements, or timeout
+            # Wait for acknowledgements, or time out
             self._wait_proc = self.flow.env.process(self._wait())
             yield self._wait_proc
         except StopIteration:
-            if not timeout:
+            if not recover:
                 # While there are unacknowledged packets
                 while self.unacknowledged:
-                    # Wait for acknowledgements, or timeout & recover
+                    # Wait for acknowledgements, or time out & recover
                     self._wait_proc = self.flow.env.process(self._wait())
                     yield self._wait_proc
                 # Mark this TCP algorithm as finished, if it isn't already
@@ -1230,6 +1238,8 @@ class Router:
 
     def route(self, address):
         """Return the correct transport handler for the given address.
+
+        Raises a KeyError if the given address is not in the routing table.
 
         :param int address: the destination address
         :return: the transport handler selected by the routing policy

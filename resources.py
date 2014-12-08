@@ -11,6 +11,7 @@ import simpy
 import simpy.util
 
 from collections import deque
+from decorator import decorator
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -38,26 +39,36 @@ def reset(klass):
     :rtype: class
     """
 
-    def _reset(obj, attr, index=None):
-        """Get the value of the specified attribute, and reset it."""
+    def _reset(self, attr, index=None):
+        """Get the value of the specified attribute, and reset it.
+
+        :param str attr: attribute name
+        :param object index: index in the container referenced by ``self.attr``
+        :return: ``self.attr``, before resetting its value
+        :rtype: object
+        """
         if index is not None:
             # Get the value of the attribute
-            val = getattr(obj, attr)
+            val = getattr(self, attr)
             # Extract the return value
             ret = val[index]
             # Reset the replacement value at the index
             val[index] = type(ret)()
         else:
             # Get the return value
-            ret = getattr(obj, attr)
+            ret = getattr(self, attr)
             # Reset the replacement value
             val = type(ret)()
         # Replace the value of the attribute
-        setattr(obj, attr, val)
+        setattr(self, attr, val)
         # Return the original value
         return ret
 
-    return type(klass.__name__, (klass,), {"reset": _reset})
+    # Add the reset method to the new type's __dict__ attribute
+    d = dict(klass.__dict__)
+    d["reset"] = _reset
+    # Return the new type, with the same name, bases, and updated __dict__
+    return type(klass.__name__, klass.__bases__, d)
 
 
 class MonitoredEnvironment(simpy.core.Environment):
@@ -70,7 +81,7 @@ class MonitoredEnvironment(simpy.core.Environment):
     and process-controlled monitoring.
 
     :param int initial_time: simulation time to start at
-    :param int step: registered value update period
+    :param int step: registered value update period (ns)
     """
 
     def __init__(self, initial_time=0, step=100000000):
