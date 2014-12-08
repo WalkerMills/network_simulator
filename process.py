@@ -270,7 +270,8 @@ class FAST(TCP):
         self.window = min(2 * self.window, window)
         # Update monitored window size
         self.flow.env.update(
-            "Window size,{},{}".format(self.flow.host.addr, self.flow.id), 
+            "Window size,{},{},{}".format(self.flow.host.addr, self.flow.dest,
+                                          self.flow.id), 
             self._window)
 
     def _window_control(self):
@@ -428,8 +429,9 @@ class Reno(TCP):
             self.window = 1
             # Update monitored window size
             self.flow.env.update(
-                "Window size,{},{}".format(self.flow.host.addr, 
-                                           self.flow.id),
+                "Window size,{},{},{}".format(self.flow.host.addr,
+                                              self.flow.host.dest,
+                                              self.flow.id),
                 self.window)
             # Revert to slow start on timeout
             self._slow_start = True
@@ -504,8 +506,9 @@ class Reno(TCP):
                 self._CA = True
         # Update monitored window size
         self.flow.env.update(
-            "Window size,{},{}".format(self.flow.host.addr, 
-                                       self.flow.id),
+            "Window size,{},{},{}".format(self.flow.host.addr,
+                                          self.flow.dest,
+                                          self.flow.id),
             self.window)
 
     def burst(self, recover=False):
