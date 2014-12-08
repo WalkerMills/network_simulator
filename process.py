@@ -606,10 +606,11 @@ class Flow:
         self._mean_rtt = 0
 
         self.env.register(
-            "Round trip times,{},{}".format(self._host.addr, self._id),
+            "Round trip times,{},{},{}".format(self._host.addr, self._dest,
+                                               self._id),
             self._avg_rtt)
         self.env.register(
-            "Flow rate,{},{}".format(self._host.addr, self._id),
+            "Flow rate,{},{},{}".format(self._host.addr, self._dest, self._id),
             lambda: self.reset("_transmitted"), True)
 
     @property
