@@ -11,7 +11,6 @@ import simpy
 import simpy.util
 
 from collections import deque
-from decorator import decorator
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
