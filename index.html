@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html>
+
+  <head>
+    <meta charset='utf-8'>
+    <meta http-equiv="X-UA-Compatible" content="chrome=1">
+    <meta name="description" content="Network simulator : Network simulator project for Caltech CS/EE 143">
+
+    <link rel="stylesheet" type="text/css" media="screen" href="stylesheets/stylesheet.css">
+
+    <title>Network simulator</title>
+  </head>
+
+  <body>
+
+    <!-- HEADER -->
+    <div id="header_wrap" class="outer">
+        <header class="inner">
+          <a id="forkme_banner" href="https://github.com/WalkerMills/network_simulator">View on GitHub</a>
+
+          <h1 id="project_title">Network simulator</h1>
+          <h2 id="project_tagline">Network simulator project for Caltech CS/EE 143</h2>
+
+            <section id="downloads">
+              <a class="zip_download_link" href="https://github.com/WalkerMills/network_simulator/zipball/master">Download this project as a .zip file</a>
+              <a class="tar_download_link" href="https://github.com/WalkerMills/network_simulator/tarball/master">Download this project as a tar.gz file</a>
+            </section>
+        </header>
+    </div>
+
+    <!-- MAIN CONTENT -->
+    <div id="main_content_wrap" class="outer">
+      <section id="main_content" class="inner">
+        <h1>
+<a id="cs-143-network-simulator" class="anchor" href="#cs-143-network-simulator" aria-hidden="true"><span class="octicon octicon-link"></span></a>CS 143 Network Simulator</h1>
+
+<p>Network simulator project for Caltech CS/EE 143.</p>
+
+<h2>
+<a id="dependencies" class="anchor" href="#dependencies" aria-hidden="true"><span class="octicon octicon-link"></span></a>Dependencies</h2>
+
+<p>This project requires Python &gt;= 3.3, SimPy &gt;= 3.0, Tkinter, NumPy, and
+Matplotlib. </p>
+
+<p>On Ubuntu &lt; 14.04, you must first</p>
+
+<pre><code># apt-get install python3 -y
+</code></pre>
+
+<p>Since versions prior to 14.04 do not come with Python 3 installed by default.
+If your system uses Python 3.3 as its stable release of Python 3, you must also</p>
+
+<pre><code># pip3 install enum34
+</code></pre>
+
+<p>in order to get the enum module, which was added in Python 3.4.  Finally, you
+must install the Python module dependencies</p>
+
+<pre><code># apt-get install python3-simpy python3-tk python3-numpy python3-matplotlib -y
+</code></pre>
+
+<p>On Arch Linux, Python 3.4 is the default Python version, so you must simply</p>
+
+<pre><code># pacman -S simpy python-pmw python-numpy python-matplotlib --noconfirm
+</code></pre>
+
+<h2>
+<a id="documentation" class="anchor" href="#documentation" aria-hidden="true"><span class="octicon octicon-link"></span></a>Documentation</h2>
+
+<p>This project is documented using Sphinx, a documentation generator.  To
+install Sphinx on Ubuntu</p>
+
+<pre><code># apt-get install python3-sphinx -y
+</code></pre>
+
+<p>On Arch Linux</p>
+
+<pre><code># pacman -S python-sphinx --noconfirm
+</code></pre>
+
+<p>To build the documentation, simply run</p>
+
+<pre><code>$ make html
+</code></pre>
+
+<p>from the project root directory.  If you have a LaTeX compilation toolchain
+installed, such as pdflatex, you may also run</p>
+
+<pre><code>$ make latexpdf
+</code></pre>
+
+<p>to build pdf documentation.  All documentation is output to the ./_build
+directory.  The latest documentation (from the tip of develop) is also
+available at</p>
+
+<p><a href="http://cs-143-network-simulator.readthedocs.org/en/latest/index.html">http://cs-143-network-simulator.readthedocs.org/en/latest/index.html</a></p>
+      </section>
+    </div>
+
+    <!-- FOOTER  -->
+    <div id="footer_wrap" class="outer">
+      <footer class="inner">
+        <p class="copyright">Network simulator maintained by <a href="https://github.com/WalkerMills">WalkerMills</a></p>
+        <p>Published with <a href="http://pages.github.com">GitHub Pages</a></p>
+      </footer>
+    </div>
+
+    
+
+  </body>
+</html>
