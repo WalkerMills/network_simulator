@@ -57,7 +57,7 @@ if __name__ == "__main__":
         test_case = next(filter(lambda c: c > -1, 
                                 [parsed.zero, parsed.one, parsed.two]))
         # Get the specified TCP algorithm
-        tcp_spec = "FAST" if parsed.fast else "Reno"
+        tcp_spec = "Reno" if parsed.reno else "FAST"
         # Generate the correct adjacency list
         adj = test.TestCase.adjacent(test.Case(test_case), tcp_spec)
     # If no case was specified
