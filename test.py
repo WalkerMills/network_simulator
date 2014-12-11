@@ -399,9 +399,9 @@ class TestCase:
         """Generate an adjanceny list for a given test case.
 
         For the given test case & TCP specifier, an adjacency list of
-        the type taken by :class:`network.Network` is constructed from
-        the adjacency lists in :attr:`adjacencies` and the TCP parameters
-        in :attr:`tcp_parameters`.
+        the type taken by :class:`Network` is constructed from the 
+        adjacency lists in :attr:`adjacencies` and the TCP parameters int
+        :attr:`tcp_parameters`.
 
         :param case: test case to build adjacency lists for
         :type case: :class:`Case`
