@@ -456,9 +456,9 @@ class NetworkInput(tkinter.Frame):
                 # Update the list of links
                 self._links.append((tuple(link), tuple(dialog.result)))
             else:
-                logger.info("link creation failed; invalid link parameters")
+                logger.warning("link creation failed; invalid link parameters")
         else:
-            logger.info("link creation failed; endpoints not valid")
+            logger.warning("link creation failed; endpoints not valid")
         # Reset start coordinates
         self._start = None
 
@@ -493,7 +493,7 @@ class NetworkInput(tkinter.Frame):
                 self._flows.append(((self._src, endpoint), 
                                     tuple(dialog.result)))
         else:
-            logger.info("invalid flow endpoint")
+            logger.warning("invalid flow endpoint")
         # Reset flow source
         self._src = None
 
