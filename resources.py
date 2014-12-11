@@ -5,15 +5,11 @@
 """
 
 import heapq
-import logging
 import queue
 import simpy
 import simpy.util
 
 from collections import deque
-
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 DOWN = 0
 """Download direction."""
@@ -99,7 +95,7 @@ class MonitoredEnvironment(simpy.core.Environment):
         """
         return self._monitored
 
-    def _update_proc(self, name, getter, avg, step):
+    def _update_process(self, name, getter, avg, step):
         """Process for periodically updating an identifier."""
         while True:
             # Call the getter, and average its value if the avg flag is set
@@ -132,7 +128,7 @@ class MonitoredEnvironment(simpy.core.Environment):
             step = self._step
         # Start the update process for this value
         self._getters[name] = self.process(
-            self._update_proc(name, getter, avg, step))
+            self._update_process(name, getter, avg, step))
 
     def update(self, name, value):
         """Add a value for the specified identifier.
@@ -321,8 +317,6 @@ class LinkEnqueue(simpy.events.Event):
         super(LinkEnqueue, self).__init__(buffer_.env)
         # Enqueue the packet for transmission, if the buffer isn't full
         if packet.size <= buffer_._available(direction):
-            logger.debug("enqueuing packet {}, {}, {} at time {}".format(
-                packet.src, packet.flow, packet.id, buffer_.env.now))
             # Increment buffer fill
             buffer_._update_fill(direction, packet.size)
             # Enqueue packet
@@ -330,10 +324,6 @@ class LinkEnqueue(simpy.events.Event):
             # Set dropped flag to False
             dropped = False
         else:
-            logger.debug(
-                "link {} dropped packet {}, {}, {} at time {}\t{}".format(
-                    buffer_.id, packet.src, packet.flow, packet.id, 
-                    buffer_.env.now, len(buffer_._queues[direction])))
             # Update dropped count
             buffer_._dropped += 1
             # Set dropped flag to True

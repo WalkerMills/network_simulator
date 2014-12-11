@@ -64,13 +64,14 @@ class Graph:
 
     title_kwargs = {
         "Flow rate": {"legend": "flow", "y_label": "Mbps", "scale": 1000},
+        "Flow received": {"legend": "flow", "y_label": "Mbps", "scale": 1000},
+        "Window size": {"legend": "flow", "y_label": "packets"},
         "Round trip times": {"legend": "flow", "y_label": "ms", "scale": 1e-6},
         "Host rate": {"legend": "host", "y_label": "Mbps", "scale": 1000},
+        "Host received": {"legend": "host", "y_label": "Mbps", "scale": 1000},
         "Link fill": {"legend": "link", "y_label": "packets"},
-        "Dropped packets": {"legend": "link", "y_label": "packets"},
         "Link rate": {"legend": "link", "y_label": "Mbps", "scale": 1000},
-        "Window size": {"legend": "flow", "y_label": "packets"},
-        "Queuing delay": {"legend": "flow", "y_label": "ms", "scale": 1e-6}}
+        "Dropped packets": {"legend": "link", "y_label": "packets"}}
     """Maps graph title to :meth:`graph` keyword parameters."""
 
     def __init__(self, adjacent, tcp="FAST", until=None):
@@ -92,8 +93,8 @@ class Graph:
                 self._data[title] = list()
             # Extract the time & value data from the raw data
             time, value = np.transpose(np.array(raw, dtype=float))
-            # Scale time from nanoseconds to milliseconds
-            time /= 1e6
+            # Scale time from nanoseconds to seconds
+            time /= 1e9
             # Append the tagged data set to the data for this category
             self._data[title].append((tags, time, value))
 
@@ -106,8 +107,9 @@ class Graph:
         """
         return list(self._data.keys())
 
-    def graph(self, title, datasets, legend=str(), y_label=str(), 
-              scale=1.0, save=False):
+    @staticmethod
+    def graph(title, datasets, legend=str(), y_label=str(), scale=1.0,
+              save=False):
         """Graph a set of data sets.
 
         :param str title: graph title
@@ -119,11 +121,9 @@ class Graph:
         :param bool save: flag indicating whether to save or display figures
         """
         # Get a new figure
-        fig = plt.figure()
-        # Set window title
-        fig.suptitle(title)
+        fig = plt.figure(figsize=(25, 2.5))
         # Label the x axis 
-        plt.xlabel("Time (ms)")
+        plt.xlabel("Time (sec)")
         # Label the y axis
         plt.ylabel(y_label)
         # For each tagged dataset
@@ -133,14 +133,16 @@ class Graph:
             plt.plot(x, y, 
                 label="{} {}".format(legend, ", ".join(str(t) for t in tags)))
         # Create the plot legend
-        plt.legend()
+        plt.legend(loc="center right")
         # If the graphing flag is set
         if not save:
+            # Set window title
+            fig.suptitle(title)
             # Graph the data
             plt.show()
         else:
             # Save the plot
-            plt.savefig(title + ".png")
+            plt.savefig(title + ".png", bbox_inches="tight")
         # Close all figures
         plt.close("all")
 
@@ -360,10 +362,10 @@ class TestCase:
                     [(("h0", "h1"), (160000000, 1000000000))]),
         Case.one: ([(("h0", "r0"), (12500000, 512000, 10000000)),
                     (("r0", "r1"), (10000000, 512000, 10000000)),
-                    (("r0", "r3"), (10000000, 512000, 10000000)),
-                    (("r1", "r2"), (10000000, 512000, 10000000)),
-                    (("r3", "r2"), (10000000, 512000, 10000000)),
-                    (("r2", "h1"), (12500000, 512000, 10000000))],
+                    (("r0", "r2"), (10000000, 512000, 10000000)),
+                    (("r1", "r3"), (10000000, 512000, 10000000)),
+                    (("r2", "r3"), (10000000, 512000, 10000000)),
+                    (("r3", "h1"), (12500000, 512000, 10000000))],
                    [(("h0", "h1"), (160000000, 500000000))]),
         Case.two: ([(("r0", "r1"), (10000000, 1024000, 10000000)),
                     (("r1", "r2"), (10000000, 1024000, 10000000)),
