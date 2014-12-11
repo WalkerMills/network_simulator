@@ -20,22 +20,22 @@ if __name__ == "__main__":
                     "the TestCase factory class for details).  The test cases "
                     "only support homogenous flows (same TCP algorithm), but "
                     "the GUI may be used to create heterogenous networks.")
-    case = parser.add_mutually_exclusive_group()
-    tcp = parser.add_mutually_exclusive_group()
-    case.add_argument(
+    case_param = parser.add_mutually_exclusive_group()
+    tcp_param = parser.add_mutually_exclusive_group()
+    case_param.add_argument(
         "-0", "--zero", dest="zero", action="store_const", const=0, default=-1,
         help="Test case 0")
-    case.add_argument(
+    case_param.add_argument(
         "-1", "--one", dest="one", action="store_const", const=1, default=-1,
         help="Test case 1")
-    case.add_argument(
+    case_param.add_argument(
         "-2", "--two", dest="two", action="store_const", const=2, default=-1,
         help="Test case 2")
-    tcp.add_argument(
-        "-F", "--FAST", dest="fast", action="store_true", default=True,
+    tcp_param.add_argument(
+        "-F", "--FAST", dest="tcp", action="store_true", default=True,
         help="FAST TCP (default)")
-    tcp.add_argument(
-        "-R", "--Reno", dest="reno", action="store_true", default=False,
+    tcp_param.add_argument(
+        "-R", "--Reno", dest="tcp", action="store_false",
         help="TCP Reno")
     parser.add_argument(
         "-s", "--save", dest="save", action="store_true", default=False,
@@ -54,12 +54,12 @@ if __name__ == "__main__":
     parsed = parser.parse_args()
     try:
         # Get the test case number
-        test_case = next(filter(lambda c: c > -1, 
-                                [parsed.zero, parsed.one, parsed.two]))
+        case = next(filter(lambda c: c > -1, 
+                           [parsed.zero, parsed.one, parsed.two]))
         # Get the specified TCP algorithm
-        tcp_spec = "Reno" if parsed.reno else "FAST"
+        tcp = "FAST" if parsed.tcp else "Reno"
         # Generate the correct adjacency list
-        adj = test.TestCase.adjacent(test.Case(test_case), tcp_spec)
+        adj = test.TestCase.adjacent(test.Case(case), tcp)
     # If no case was specified
     except StopIteration:
         # Draw the GUI

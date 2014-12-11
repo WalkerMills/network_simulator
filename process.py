@@ -6,7 +6,6 @@
 
 import abc
 import itertools
-import logging
 import math
 import queue
 import random
@@ -15,9 +14,6 @@ import simpy
 from collections import deque
 
 import resources
-
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
 
 
 class TCP(metaclass=abc.ABCMeta):
@@ -45,6 +41,8 @@ class TCP(metaclass=abc.ABCMeta):
         self._gen = self._flow.generator()
         # Hash table mapping unacknowledged packet -> departure time
         self._unacknowledged = dict()
+        # Maximum timeout (64 sec)
+        self._max_time = 64000000000
         # Finish event
         self._finished = simpy.events.Event(self._flow.env)
 
@@ -68,6 +66,15 @@ class TCP(metaclass=abc.ABCMeta):
         :rtype: :class:`Flow`
         """
         return self._flow
+
+    @property
+    def max_time(self):
+        """The maximum acknowledgement timeout length.
+
+        :return: maximum timeout (ns)
+        :rtype: int
+        """
+        return self._max_time
 
     @property
     def timed_out(self):
@@ -307,7 +314,7 @@ class FAST(TCP):
         # Calculate round trip time
         rtt = self.flow.env.now - self.departure(pid)
         # If 2 * RTT is greater than the current timeout, update it
-        self.timeout = max(self.timeout, 2 * rtt)
+        self.timeout = min(max(self.timeout, 2 * rtt), self.max_time)
         # Update mean round trip time & queuing delay
         self._estimate(rtt)
         # Mark packet as acknowledged
@@ -405,8 +412,6 @@ class Reno(TCP):
         self._CA = False
         # flag indicating fast recovery phase
         self._fast_recovery = False
-        # Maximum timeout (64 sec)
-        self._max_time = 64000000000
         # Slow start threshold
         self._threshold = 32
         # Next ID's expected by the destination host.  Last 4 are cached to
@@ -420,7 +425,6 @@ class Reno(TCP):
         try:
             # Wait for acknowledgement(s)
             yield self.flow.env.timeout(self.timeout)
-            logger.debug("timeout occurred".format(self.window))
             # Retransmit dropped packets
             yield self.flow.env.process(self.burst(recover=True))
             # Set the slow start threshold to half the window size
@@ -430,7 +434,7 @@ class Reno(TCP):
             # Update monitored window size
             self.flow.env.update(
                 "Window size,{},{},{}".format(self.flow.host.addr,
-                                              self.flow.host.dest,
+                                              self.flow.dest,
                                               self.flow.id),
                 self.window)
             # Revert to slow start on timeout
@@ -463,18 +467,15 @@ class Reno(TCP):
         # Mark packet as acknowledged
         self.mark(pid)
         # If 2 * RTT is greater than the current timeout, update it
-        self.timeout = max(self.timeout, 2 * rtt)
+        self.timeout = min(max(self.timeout, 2 * rtt), self.max_time)
         #if in slow start phase
         if self._slow_start == True:
             self.window += 1
-            logger.debug("slow start {} < {}".format(self.window, 
-                                                     self._threshold))
             if self.window >= self._threshold:
                 self._slow_start = False
                 self._CA = True
         # if in congestion avoidance phase
         elif self._CA == True:
-            logger.debug("congestion avoidance {}".format(self.window))
             # If we have 3 duplicate ACK's, perform fast retransmission
             if self._next.count(self._next[0]) == self._next.maxlen:
                 # Set slow start threshold to half of the window size
@@ -496,11 +497,8 @@ class Reno(TCP):
                 self.window += 1 / self.window
         # if in fast recovery phase
         elif self._fast_recovery == True:
-            logger.debug("fast recovery {}".format(self.window))
             # don't make any adjustments until there's a timeout, or
             # entire transmitted window is acknowledged
-            for k in self.unacknowledged.keys():
-                logger.debug("unacknowledged: {}".format(k.id))
             if len(self.unacknowledged.items()) == 0:
                 self._fast_recovery = False
                 self._CA = True
@@ -704,8 +702,6 @@ class Flow:
         :type ack: :class:`resources.ACK`
         :return: None
         """
-        logger.debug("flow {}, {} acknowledges packet {} at time {}".format(
-           self._id, self._host.addr, ack.id, self.env.now))
         try:
             # Update round trip times
             self._update_rtt(ack.id)
@@ -897,18 +893,12 @@ class Host:
         """
 
         if packet.dest != self._addr:
-            logger.debug("host {} transmitting packet {}, {}, {} at time"
-                       " {}".format(self._addr, packet.src, packet.flow, 
-                                    packet.id, self.env.now))
             
             # update bits transmitted by host
             self._transmitted += packet.size
             # Transmit an outbound packet
             yield self.env.process(self._transport.send(packet))
         else:
-            logger.debug("host {} processing ACK {}, {}, {} at time"
-                       " {}".format(self._addr, packet.src, packet.flow,
-                                    packet.id, self.env.now))
             # Send an inbound ACK to its destination flow
             yield self.env.process(
                 self._flows[packet.flow].acknowledge(packet))
@@ -949,7 +939,7 @@ class Link:
         self._flush_proc = (self.env.process(self._flush(resources.DOWN)),
                             self.env.process(self._flush(resources.UP)))
         # Time to wait between buffer pops if the buffer was empty
-        self._flush_wait = 1000000 # 1 ms
+        self._flush_wait = 100000 # .1 ms
 
         self.env.register(
             "Link rate,{},{}".format(self._res.id, resources.DOWN),
@@ -1030,10 +1020,6 @@ class Link:
         :type packet: :class:`resources.Packet`
         :return: None
         """
-        logger.debug(
-            "link {} transmitting packet {}, {}, {} at time {}".format(
-                self._res.id, packet.src, packet.flow, packet.id, 
-                self.env.now))
         # Transmit packet after waiting, as if sending the packet
         # across a physical link
         yield simpy.util.start_delayed(self.env,
@@ -1175,8 +1161,6 @@ class Router:
                 continue
             # Create a new routing packet with updated rounting information
             r = resources.Routing((host, cost + t.cost, new_path, t.reverse()))
-            logger.debug("R{} broadcasting on L{}".format(self._addr,
-                                                          t.link.id))
             # send the newly created packet
             yield self.env.process(self.transmit(r, t))
 
@@ -1200,16 +1184,10 @@ class Router:
             # update new routing table if host isn't in table
             if not (host in self._update_table.keys()):
                 self._update_table[host] = (rec_port, cost)
-                logger.debug("R{} create: L{}, cost {}, H{}".format(
-                    self._addr, rec_port.link.id, cost, host))
                 yield self.env.process(
                     self._broadcast_packet(host, cost, path, rec_port))
             # update new routing table if there's a more efficient path
             if self._update_table[host][1] > cost:
-                logger.debug(
-                    "R{} replace H{}: L{}, cost {} to L{}, cost {}".format(
-                        self._addr, host, self._update_table[host][0].link.id, 
-                        self._update_table[host][1], rec_port.link.id, cost))
                 self._update_table[host] = (rec_port, cost)
                 yield self.env.process(
                     self._broadcast_packet(host, cost, path, rec_port))
@@ -1220,7 +1198,6 @@ class Router:
                 not self._converged:
                 # set flag
                 self._converged = True
-                logger.debug("router {} locally converged".format(self._addr))
                 # For each neighboring router
                 for t in self.routers:
                     # Send a Finish packet pointing to this router to inform
@@ -1231,7 +1208,6 @@ class Router:
         # check for one degree of convergence (this router and neighbors)
         if self._converged and all(self._finish_table.values()):
             # If there is an updated routing table
-            logger.debug("router {} fully converged".format(self._addr))
             for key, value in self._update_table.items():
                 self._routing_table[key] = value
             # and reset all variables used for tracking convergence
@@ -1239,6 +1215,9 @@ class Router:
             self._converged = False
             self._finish_table = dict()
             self._update_table = dict()
+            # Reset buffer occupancy for new routing table cost calculations
+            for l in self._links:
+                l.link._res._occupancy = [0, 0]
 
     def route(self, address):
         """Return the correct transport handler for the given address.
@@ -1262,7 +1241,6 @@ class Router:
                 for transport in self._links:
                     # check for any direct connections to hosts
                     if Host in map(type, transport.link.endpoints):
-                        logger.debug("Bellman-Ford routing table update")
                         host = next(filter(lambda e: type(e) == Host,
                                            transport.link.endpoints))
                         # update routing table for this router
@@ -1320,8 +1298,6 @@ class Router:
         :type packet: :class:`resources.Packet`
         :return: None
         """
-        logger.debug("router {} received packet {}, {}, {} at time {}".format(
-           self._addr, packet.src, packet.flow, packet.id, self.env.now))
 
         # Push another packet through the queue
         packet = yield self._res.receive(packet)
@@ -1344,10 +1320,6 @@ class Router:
         :type transport: :class:`Transport`      
         :return: None      
         """              
-        logger.debug(
-            "router {} transmitting packet {}, {}, {} at time {}".format(
-                self._addr, packet.src, packet.flow, packet.id, 
-                self.env.now))
         # Send the packet      
         yield self.env.process(transport.send(packet))
         # Wait packet size / link rate before terminating

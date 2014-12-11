@@ -92,8 +92,8 @@ class Graph:
                 self._data[title] = list()
             # Extract the time & value data from the raw data
             time, value = np.transpose(np.array(raw, dtype=float))
-            # Scale time from nanoseconds to milliseconds
-            time /= 1e6
+            # Scale time from nanoseconds to seconds
+            time /= 1e9
             # Append the tagged data set to the data for this category
             self._data[title].append((tags, time, value))
 
@@ -106,8 +106,9 @@ class Graph:
         """
         return list(self._data.keys())
 
-    def graph(self, title, datasets, legend=str(), y_label=str(), 
-              scale=1.0, save=False):
+    @staticmethod
+    def graph(title, datasets, legend=str(), y_label=str(), scale=1.0,
+              save=False):
         """Graph a set of data sets.
 
         :param str title: graph title
@@ -119,11 +120,9 @@ class Graph:
         :param bool save: flag indicating whether to save or display figures
         """
         # Get a new figure
-        fig = plt.figure()
-        # Set window title
-        fig.suptitle(title)
+        fig = plt.figure(figsize=(25, 2.5))
         # Label the x axis 
-        plt.xlabel("Time (ms)")
+        plt.xlabel("Time (sec)")
         # Label the y axis
         plt.ylabel(y_label)
         # For each tagged dataset
@@ -133,14 +132,16 @@ class Graph:
             plt.plot(x, y, 
                 label="{} {}".format(legend, ", ".join(str(t) for t in tags)))
         # Create the plot legend
-        plt.legend()
+        plt.legend(loc="center right")
         # If the graphing flag is set
         if not save:
+            # Set window title
+            fig.suptitle(title)
             # Graph the data
             plt.show()
         else:
             # Save the plot
-            plt.savefig(title + ".png")
+            plt.savefig(title + ".png", bbox_inches="tight")
         # Close all figures
         plt.close("all")
 
@@ -383,7 +384,7 @@ class TestCase:
     tcp_parameters = {
         Case.zero: {"FAST": [[1, 30000000, 45]], "Reno": [[1, 30000000]]}, 
         Case.one: {"FAST": [[1, 120000000, 20]], "Reno": [[1, 120000000]]},
-        Case.two: {"FAST": [[1, 150000000, 7], 
+        Case.two: {"FAST": [[1, 150000000, 6], 
                             [1, 90000000, 6],
                             [1, 90000000, 6]],
                    "Reno": [[1, 1500000000], 
