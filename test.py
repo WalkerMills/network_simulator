@@ -64,13 +64,14 @@ class Graph:
 
     title_kwargs = {
         "Flow rate": {"legend": "flow", "y_label": "Mbps", "scale": 1000},
+        "Flow received": {"legend": "flow", "y_label": "Mbps", "scale": 1000},
+        "Window size": {"legend": "flow", "y_label": "packets"},
         "Round trip times": {"legend": "flow", "y_label": "ms", "scale": 1e-6},
         "Host rate": {"legend": "host", "y_label": "Mbps", "scale": 1000},
+        "Host received": {"legend": "host", "y_label": "Mbps", "scale": 1000},
         "Link fill": {"legend": "link", "y_label": "packets"},
-        "Dropped packets": {"legend": "link", "y_label": "packets"},
         "Link rate": {"legend": "link", "y_label": "Mbps", "scale": 1000},
-        "Window size": {"legend": "flow", "y_label": "packets"},
-        "Queuing delay": {"legend": "flow", "y_label": "ms", "scale": 1e-6}}
+        "Dropped packets": {"legend": "link", "y_label": "packets"}}
     """Maps graph title to :meth:`graph` keyword parameters."""
 
     def __init__(self, adjacent, tcp="FAST", until=None):
